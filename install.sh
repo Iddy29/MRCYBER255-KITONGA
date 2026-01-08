@@ -13,10 +13,12 @@ MENU_PATH="/usr/local/bin/menu"
 # Check if wget or curl is available
 if command -v wget &> /dev/null; then
     DOWNLOAD_CMD="wget"
-    DOWNLOAD_FLAGS="--show-progress --timeout=30 -O"
+    # Force IPv4, add retries, show progress
+    DOWNLOAD_FLAGS="--show-progress --timeout=30 --tries=3 --retry-connrefused --prefer-family=IPv4 -O"
 elif command -v curl &> /dev/null; then
     DOWNLOAD_CMD="curl"
-    DOWNLOAD_FLAGS="-L --connect-timeout 30 --max-time 60 -o"
+    # Force IPv4, add retries
+    DOWNLOAD_FLAGS="-4 -L --connect-timeout 30 --max-time 60 --retry 3 --retry-delay 2 -o"
 else
     echo "Error: Neither wget nor curl is installed. Please install one of them first:"
     echo "  apt-get update && apt-get install -y wget"
@@ -27,10 +29,34 @@ fi
 
 echo "Downloading menu.sh from repository..."
 echo "URL: $MENU_URL"
+echo "Note: Using IPv4 only to avoid connection issues..."
 echo ""
 
-# Download menu.sh with progress
-if $DOWNLOAD_CMD $DOWNLOAD_FLAGS "$MENU_PATH" "$MENU_URL" 2>&1; then
+# Download menu.sh with progress and retries
+DOWNLOAD_ATTEMPTS=0
+MAX_ATTEMPTS=3
+DOWNLOAD_SUCCESS=false
+
+while [[ $DOWNLOAD_ATTEMPTS -lt $MAX_ATTEMPTS ]]; do
+    DOWNLOAD_ATTEMPTS=$((DOWNLOAD_ATTEMPTS + 1))
+    
+    if [[ $DOWNLOAD_ATTEMPTS -gt 1 ]]; then
+        echo "Retry attempt $DOWNLOAD_ATTEMPTS of $MAX_ATTEMPTS..."
+        sleep 2
+    fi
+    
+    if $DOWNLOAD_CMD $DOWNLOAD_FLAGS "$MENU_PATH" "$MENU_URL" 2>&1; then
+        DOWNLOAD_SUCCESS=true
+        break
+    else
+        echo "Download attempt $DOWNLOAD_ATTEMPTS failed."
+        if [[ -f "$MENU_PATH" ]]; then
+            rm -f "$MENU_PATH"
+        fi
+    fi
+done
+
+if [[ "$DOWNLOAD_SUCCESS" == "true" ]]; then
     # Check if download was successful
     if [[ ! -f "$MENU_PATH" ]] || [[ ! -s "$MENU_PATH" ]]; then
         echo "Error: Failed to download menu.sh or file is empty."
@@ -88,14 +114,24 @@ if $DOWNLOAD_CMD $DOWNLOAD_FLAGS "$MENU_PATH" "$MENU_URL" 2>&1; then
         exit 1
     fi
 else
-    echo "Error: Failed to download menu.sh from repository."
+    echo ""
+    echo "❌ Error: Failed to download menu.sh from repository after $MAX_ATTEMPTS attempts."
     echo "URL: $MENU_URL"
     echo ""
     echo "Possible issues:"
     echo "  - Internet connection problem"
-    echo "  - Repository URL is incorrect"
-    echo "  - GitHub is temporarily unavailable"
+    echo "  - GitHub is blocked or unreachable from your VPS"
+    echo "  - IPv6 connectivity issues (script tried IPv4 only)"
+    echo "  - Firewall blocking GitHub"
     echo ""
-    echo "Please check your internet connection and try again."
+    echo "Troubleshooting steps:"
+    echo "  1. Test connectivity: ping -4 raw.githubusercontent.com"
+    echo "  2. Test with curl: curl -4 -I https://raw.githubusercontent.com"
+    echo "  3. Check firewall rules"
+    echo "  4. Try manual download:"
+    echo "     wget --prefer-family=IPv4 -O /usr/local/bin/menu \"$MENU_URL\""
+    echo "     chmod +x /usr/local/bin/menu"
+    echo "     /usr/local/bin/menu --install-setup"
+    echo ""
     exit 1
 fi
