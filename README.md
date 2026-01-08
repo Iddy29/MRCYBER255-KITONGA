@@ -10,7 +10,7 @@ It supports multiple tunneling protocols, user management, SSL automation, and a
 Run the following command to install the latest version:
 
 ```bash
-curl -L -o install.sh "https://raw.githubusercontent.com/firewallfalcons/FirewallFalcon-Manager/main/install.sh" && chmod +x install.sh && sudo ./install.sh && rm install.sh
+curl -L -o install.sh "https://raw.githubusercontent.com/Iddy29/MRCYBER255-KITONGA/refs/heads/main/install.sh" && chmod +x install.sh && sudo ./install.sh && rm install.sh
 ```
 
 > ⚠️ **Important:**
