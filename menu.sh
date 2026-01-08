@@ -155,20 +155,99 @@ check_and_free_ports() {
                 continue
             fi
             
+            # Try to get process name using ps if not found in ss output
+            if [[ -z "$conflicting_name" || "$conflicting_name" == "unknown" ]]; then
+                if [[ -n "$conflicting_pid" ]]; then
+                    conflicting_name=$(ps -p "$conflicting_pid" -o comm= 2>/dev/null | head -n 1)
+                fi
+            fi
+            
+            # Check if it's a DNSTT-related process (sldns-server, dnstt-server, python3 for EDNS proxy)
+            local is_dnstt_process=false
+            if [[ "$conflicting_name" == *"sldns-server"* ]] || [[ "$conflicting_name" == *"dnstt-server"* ]] || \
+               [[ "$conflicting_name" == *"dnstt"* ]] || ([[ "$conflicting_name" == *"python3"* ]] && [[ "$port" == "53" ]]); then
+                is_dnstt_process=true
+            fi
+            
+            # For DNSTT processes, automatically handle them
+            if [[ "$is_dnstt_process" == "true" ]]; then
+                echo -e "${C_YELLOW}⚠️ Port $port is in use by DNSTT process '${conflicting_name:-unknown}' (PID: ${conflicting_pid}).${C_RESET}"
+                echo -e "${C_BLUE}ℹ️ Detected DNSTT process. Stopping DNSTT services automatically...${C_RESET}"
+                
+                # Stop DNSTT services properly
+                if systemctl stop dnstt.service 2>/dev/null; then
+                    echo -e "${C_GREEN}✅ Stopped dnstt.service${C_RESET}"
+                fi
+                if [ -f "$DNSTT_EDNS_SERVICE" ]; then
+                    if systemctl stop dnstt-edns-proxy.service 2>/dev/null; then
+                        echo -e "${C_GREEN}✅ Stopped dnstt-edns-proxy.service${C_RESET}"
+                    fi
+                fi
+                
+                sleep 2
+                
+                # If process still running, kill it directly
+                if [[ -n "$conflicting_pid" ]] && kill -0 "$conflicting_pid" 2>/dev/null; then
+                    echo -e "${C_YELLOW}⚠️ Process still running, terminating PID $conflicting_pid...${C_RESET}"
+                    kill -9 "$conflicting_pid" 2>/dev/null
+                    sleep 1
+                fi
+                
+                # Verify port is free
+                if ss -lntp 2>/dev/null | grep -q ":$port\s" || ss -lunp 2>/dev/null | grep -q ":$port\s"; then
+                    echo -e "${C_YELLOW}⚠️ Port $port still in use. Attempting additional cleanup...${C_RESET}"
+                    # Try to find and kill any remaining processes on this port
+                    local remaining_pids
+                    remaining_pids=$(ss -lunp 2>/dev/null | grep ":$port\s" | grep -oP 'pid=\K[0-9]+' 2>/dev/null)
+                    for pid in $remaining_pids; do
+                        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                            kill -9 "$pid" 2>/dev/null
+                        fi
+                    done
+                    sleep 2
+                    
+                    if ss -lntp 2>/dev/null | grep -q ":$port\s" || ss -lunp 2>/dev/null | grep -q ":$port\s"; then
+                        echo -e "${C_RED}❌ Failed to free port $port. Please stop the process manually and try again.${C_RESET}"
+                        echo -e "${C_YELLOW}💡 Try: systemctl stop dnstt.service dnstt-edns-proxy.service${C_RESET}"
+                        return 1
+                    fi
+                fi
+                
+                echo -e "${C_GREEN}✅ Port $port has been successfully freed.${C_RESET}"
+                continue
+            fi
+            
             echo -e "${C_YELLOW}⚠️ Warning: Port $port is in use by process '${conflicting_name:-unknown}' (PID: ${conflicting_pid}).${C_RESET}"
             read -p "👉 Do you want to attempt to stop this process? (y/n): " kill_confirm
             if [[ "$kill_confirm" == "y" || "$kill_confirm" == "Y" ]]; then
                 echo -e "${C_GREEN}🛑 Stopping process PID $conflicting_pid...${C_RESET}"
                 local process_name
                 process_name=$(ps -p "$conflicting_pid" -o comm= 2>/dev/null)
+                
+                # Try systemctl first if it's a service
+                local service_stopped=false
                 if [[ -n "$process_name" ]]; then
-                    systemctl stop "$process_name" &>/dev/null || kill -9 "$conflicting_pid" 2>/dev/null
-                else
-                    kill -9 "$conflicting_pid" 2>/dev/null
+                    # Check if it's a systemd service
+                    if systemctl list-units --type=service --state=running 2>/dev/null | grep -q "$process_name"; then
+                        if systemctl stop "$process_name" 2>/dev/null; then
+                            service_stopped=true
+                            echo -e "${C_GREEN}✅ Stopped service: $process_name${C_RESET}"
+                        fi
+                    fi
                 fi
+                
+                # If systemctl didn't work, try kill
+                if [[ "$service_stopped" == "false" ]]; then
+                    if [[ -n "$process_name" ]]; then
+                        kill -9 "$conflicting_pid" 2>/dev/null
+                    else
+                        kill -9 "$conflicting_pid" 2>/dev/null
+                    fi
+                fi
+                
                 sleep 2
                 
-                if ss -lntp | grep -q ":$port\s" || ss -lunp | grep -q ":$port\s"; then
+                if ss -lntp 2>/dev/null | grep -q ":$port\s" || ss -lunp 2>/dev/null | grep -q ":$port\s"; then
                      echo -e "${C_RED}❌ Failed to free port $port. Please handle it manually. Aborting.${C_RESET}"
                      return 1
                 else
