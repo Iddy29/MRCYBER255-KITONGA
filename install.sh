@@ -61,8 +61,23 @@ if $DOWNLOAD_CMD $DOWNLOAD_FLAGS "$MENU_PATH" "$MENU_URL" 2>&1; then
     echo "This may take a few moments..."
     echo ""
     
-    # Run setup with timeout to prevent hanging
-    if timeout 120 "$MENU_PATH" --install-setup 2>&1; then
+    # Run setup with timeout to prevent hanging (if timeout command exists)
+    if command -v timeout &> /dev/null; then
+        if timeout 120 "$MENU_PATH" --install-setup 2>&1; then
+            SETUP_SUCCESS=true
+        else
+            SETUP_SUCCESS=false
+        fi
+    else
+        # If timeout doesn't exist, run without timeout
+        if "$MENU_PATH" --install-setup 2>&1; then
+            SETUP_SUCCESS=true
+        else
+            SETUP_SUCCESS=false
+        fi
+    fi
+    
+    if [[ "$SETUP_SUCCESS" == "true" ]]; then
         echo ""
         echo "✅ Installation complete! Type 'menu' to start."
     else
