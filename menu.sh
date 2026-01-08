@@ -63,12 +63,17 @@ fi
 
 # Mandatory Dependency Check (Added jq and curl)
 for cmd in bc jq curl wget; do
-    if ! command -v $cmd &> /dev/null; then
+    if ! command -v "$cmd" &> /dev/null; then
         echo -e "${C_YELLOW}⚠️ Warning: '$cmd' not found. Attempting to install it...${C_RESET}"
-        apt-get update > /dev/null 2>&1 && apt-get install -y $cmd || {
+        if ! apt-get update > /dev/null 2>&1; then
+            echo -e "${C_RED}❌ Error: Failed to update package list.${C_RESET}"
+            exit 1
+        fi
+        if ! apt-get install -y "$cmd" > /dev/null 2>&1; then
             echo -e "${C_RED}❌ Error: Failed to install '$cmd'. Please install it manually ('apt-get install $cmd') and re-run the script.${C_RESET}"
             exit 1
-        }
+        fi
+        echo -e "${C_GREEN}✅ Successfully installed $cmd.${C_RESET}"
     fi
 done
 
@@ -411,8 +416,7 @@ delete_user() {
     killall -u "$username" -9 &>/dev/null
     sleep 1
 
-    userdel -r "$username" &>/dev/null
-    if [ $? -eq 0 ]; then
+    if userdel -r "$username" &>/dev/null; then
          echo -e "\n${C_GREEN}✅ System user '$username' has been deleted.${C_RESET}"
     else
          echo -e "\n${C_RED}❌ Failed to delete system user '$username'.${C_RESET}"
@@ -495,8 +499,7 @@ lock_user() {
         fi
     fi
 
-    usermod -L "$u"
-    if [ $? -eq 0 ]; then
+    if usermod -L "$u" 2>/dev/null; then
         killall -u "$u" -9 &>/dev/null
         echo -e "\n${C_GREEN}✅ User '$u' has been locked and active sessions killed.${C_RESET}"
     else
@@ -531,8 +534,7 @@ unlock_user() {
         fi
     fi
 
-    usermod -U "$u"
-    if [ $? -eq 0 ]; then
+    if usermod -U "$u" 2>/dev/null; then
         echo -e "\n${C_GREEN}✅ User '$u' has been unlocked.${C_RESET}"
     else
         echo -e "\n${C_RED}❌ Failed to unlock user '$u'.${C_RESET}"
@@ -639,7 +641,7 @@ backup_user_data() {
     fi
     echo -e "\n${C_BLUE}⚙️ Backing up user database and settings to ${C_YELLOW}$backup_path${C_RESET}..."
     tar -czf "$backup_path" -C "$(dirname "$DB_DIR")" "$(basename "$DB_DIR")"
-    if [ $? -eq 0 ]; then
+    if passwd -S "$username" 2>/dev/null | grep -q " P "; then
         echo -e "\n${C_GREEN}✅ SUCCESS: User data backup created at ${C_YELLOW}$backup_path${C_RESET}"
     else
         echo -e "\n${C_RED}❌ ERROR: Backup failed.${C_RESET}"
@@ -733,7 +735,7 @@ _restart_ssh() {
     fi
 
     systemctl restart "${ssh_service_name}"
-    if [ $? -eq 0 ]; then
+    if passwd -S "$username" 2>/dev/null | grep -q " P "; then
         echo -e "${C_GREEN}✅ SSH service ('${ssh_service_name}') restarted successfully.${C_RESET}"
     else
         echo -e "${C_RED}❌ Failed to restart SSH service ('${ssh_service_name}'). Please check 'journalctl -u ${ssh_service_name}' for errors.${C_RESET}"
@@ -847,11 +849,15 @@ install_udp_custom() {
     fi
 
     echo -e "\n${C_GREEN}📥 Downloading udp-custom binary...${C_RESET}"
-    wget -q --show-progress -O "$UDP_CUSTOM_DIR/udp-custom" "$binary_url"
-    if [ $? -ne 0 ]; then
-        echo -e "\n${C_RED}❌ Failed to download the udp-custom binary.${C_RESET}"
+    if ! wget -q --show-progress -O "$UDP_CUSTOM_DIR/udp-custom" "$binary_url"; then
+        echo -e "\n${C_RED}❌ Failed to download the udp-custom binary from $binary_url${C_RESET}"
         rm -rf "$UDP_CUSTOM_DIR"
-        return
+        return 1
+    fi
+    if [[ ! -f "$UDP_CUSTOM_DIR/udp-custom" ]] || [[ ! -s "$UDP_CUSTOM_DIR/udp-custom" ]]; then
+        echo -e "\n${C_RED}❌ Downloaded file is empty or missing.${C_RESET}"
+        rm -rf "$UDP_CUSTOM_DIR"
+        return 1
     fi
     chmod +x "$UDP_CUSTOM_DIR/udp-custom"
 
@@ -877,7 +883,7 @@ After=network.target
 [Service]
 User=root
 Type=simple
-ExecStart=$UDP_CUSTOM_DIR/udp-custom server -exclude 53,5300
+ExecStart="$UDP_CUSTOM_DIR/udp-custom" server -exclude 53,5300
 WorkingDirectory=$UDP_CUSTOM_DIR/
 Restart=always
 RestartSec=2s
@@ -952,7 +958,7 @@ install_badvpn() {
 Description=BadVPN UDP Gateway
 After=network.target
 [Service]
-ExecStart=$badvpn_binary --listen-addr 0.0.0.0:7300 --max-clients 1000 --max-connections-for-client 8
+ExecStart="$badvpn_binary" --listen-addr 0.0.0.0:7300 --max-clients 1000 --max-connections-for-client 8
 User=root
 Restart=always
 RestartSec=3
@@ -1464,7 +1470,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$DNSTT_BINARY -udp :5300$mtu_string -privkey-file $DNSTT_KEYS_DIR/server.key $TUNNEL_DOMAIN $FORWARD_TARGET
+ExecStart=$DNSTT_BINARY -udp :5300$mtu_string -privkey-file "$DNSTT_KEYS_DIR/server.key" "$TUNNEL_DOMAIN" "$FORWARD_TARGET"
 Restart=always
 RestartSec=3
 
@@ -1482,7 +1488,7 @@ Requires=dnstt.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 $DNSTT_EDNS_PROXY
+ExecStart=/usr/bin/python3 "$DNSTT_EDNS_PROXY"
 Restart=always
 RestartSec=3
 
@@ -1668,10 +1674,14 @@ install_falcon_proxy() {
     local download_url="https://github.com/firewallfalcons/FirewallFalcon-Manager/releases/download/$SELECTED_VERSION/$binary_name"
 
     echo -e "\n${C_GREEN}📥 Downloading Falcon Proxy $SELECTED_VERSION ($binary_name)...${C_RESET}"
-    wget -q --show-progress -O "$FALCONPROXY_BINARY" "$download_url"
-    if [ $? -ne 0 ]; then
-        echo -e "\n${C_RED}❌ Failed to download the binary. Please ensure version $SELECTED_VERSION has asset '$binary_name'.${C_RESET}"
-        return
+    if ! wget -q --show-progress -O "$FALCONPROXY_BINARY" "$download_url"; then
+        echo -e "\n${C_RED}❌ Failed to download the binary from $download_url${C_RESET}"
+        echo -e "${C_YELLOW}ℹ️ Please ensure version $SELECTED_VERSION has asset '$binary_name'.${C_RESET}"
+        return 1
+    fi
+    if [[ ! -f "$FALCONPROXY_BINARY" ]] || [[ ! -s "$FALCONPROXY_BINARY" ]]; then
+        echo -e "\n${C_RED}❌ Downloaded file is empty or missing.${C_RESET}"
+        return 1
     fi
     chmod +x "$FALCONPROXY_BINARY"
 
@@ -1684,7 +1694,7 @@ After=network.target
 [Service]
 User=root
 Type=simple
-ExecStart=$FALCONPROXY_BINARY -p $ports
+ExecStart="$FALCONPROXY_BINARY" -p "$ports"
 Restart=always
 RestartSec=2s
 
@@ -1762,8 +1772,12 @@ install_zivpn() {
 
     echo -e "\n${C_GREEN}📦 Downloading ZiVPN binary...${C_RESET}"
     if ! wget -q --show-progress -O "$ZIVPN_BIN" "$zivpn_url"; then
-        echo -e "${C_RED}❌ Download failed. Check internet connection.${C_RESET}"
-        return
+        echo -e "${C_RED}❌ Download failed from $zivpn_url. Check internet connection.${C_RESET}"
+        return 1
+    fi
+    if [[ ! -f "$ZIVPN_BIN" ]] || [[ ! -s "$ZIVPN_BIN" ]]; then
+        echo -e "${C_RED}❌ Downloaded file is empty or missing.${C_RESET}"
+        return 1
     fi
     chmod +x "$ZIVPN_BIN"
 
@@ -1799,7 +1813,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$ZIVPN_DIR
-ExecStart=$ZIVPN_BIN server -c $ZIVPN_CONFIG_FILE
+ExecStart="$ZIVPN_BIN" server -c "$ZIVPN_CONFIG_FILE"
 Restart=always
 RestartSec=3
 Environment=ZIVPN_LOG_LEVEL=info
@@ -1816,7 +1830,9 @@ EOF
     read -p "👉 Enter passwords separated by commas (e.g., user1,user2) [Default: 'zi']: " input_config
     
     if [ -n "$input_config" ]; then
+        local OLD_IFS="$IFS"
         IFS=',' read -r -a config_array <<< "$input_config"
+        IFS="$OLD_IFS"
         # Ensure array format for JSON
         json_passwords=$(printf '"%s",' "${config_array[@]}")
         json_passwords="[${json_passwords%,}]"

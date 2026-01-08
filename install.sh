@@ -14,11 +14,11 @@ MENU_PATH="/usr/local/bin/menu"
 if command -v wget &> /dev/null; then
     DOWNLOAD_CMD="wget"
     # Force IPv4, add retries, show progress
-    DOWNLOAD_FLAGS="--show-progress --timeout=30 --tries=3 --retry-connrefused --prefer-family=IPv4 -O"
+    DOWNLOAD_FLAGS=("--show-progress" "--timeout=30" "--tries=3" "--retry-connrefused" "--prefer-family=IPv4" "-O")
 elif command -v curl &> /dev/null; then
     DOWNLOAD_CMD="curl"
     # Force IPv4, add retries
-    DOWNLOAD_FLAGS="-4 -L --connect-timeout 30 --max-time 60 --retry 3 --retry-delay 2 -o"
+    DOWNLOAD_FLAGS=("-4" "-L" "--connect-timeout" "30" "--max-time" "60" "--retry" "3" "--retry-delay" "2" "-o")
 else
     echo "Error: Neither wget nor curl is installed. Please install one of them first:"
     echo "  apt-get update && apt-get install -y wget"
@@ -45,7 +45,7 @@ while [[ $DOWNLOAD_ATTEMPTS -lt $MAX_ATTEMPTS ]]; do
         sleep 2
     fi
     
-    if $DOWNLOAD_CMD $DOWNLOAD_FLAGS "$MENU_PATH" "$MENU_URL" 2>&1; then
+    if $DOWNLOAD_CMD "${DOWNLOAD_FLAGS[@]}" "$MENU_PATH" "$MENU_URL" 2>&1; then
         DOWNLOAD_SUCCESS=true
         break
     else
