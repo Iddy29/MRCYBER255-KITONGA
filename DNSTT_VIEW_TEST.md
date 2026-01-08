@@ -18,6 +18,13 @@ menu
 # - NS Record
 # - Server/Public Ports
 # - EDNS Sizes
+# - Service Status (Active/Inactive for both services)
+# - Port Status (Listening/Not Listening for ports 53 and 5300)
+#
+# If services are not running, you'll get options to:
+#   1) Restart all DNSTT services
+#   2) View service logs (for troubleshooting)
+#   3) Continue (do nothing)
 ```
 
 ---
@@ -203,7 +210,7 @@ echo "  MTU: ${MTU_VALUE:-Not set}"
 
 ## 📋 What You'll See in Configuration
 
-When you view DNSTT details, you'll see:
+When you view DNSTT details through the menu (Option 8 → Option 7), you'll see:
 
 ```
 =====================================================
@@ -219,7 +226,22 @@ Your connection details:
   - Server Port:   5300 (internal)
   - Public Port:   53 (EDNS proxy)
   - EDNS Sizes:    External: 512, Internal: 1800 (high speed)
+
+📊 Service Status:
+  - DNSTT Server (port 5300): ✅ ACTIVE
+  - EDNS Proxy (port 53):    ✅ ACTIVE
+
+🔌 Port Status:
+  - Port 53:   ✅ LISTENING
+  - Port 5300: ✅ LISTENING
+
+✅ All DNSTT services are running correctly!
 ```
+
+**If services are not running**, you'll see:
+- Service status showing ❌ INACTIVE
+- Port status showing ❌ NOT LISTENING
+- Options to restart services or view logs
 
 ---
 
@@ -227,6 +249,14 @@ Your connection details:
 
 ### If services are not running:
 
+**Option 1: Use the Menu (Easiest)**
+```bash
+# Go to: Main Menu → Option 8 → Option 7
+# The menu will detect inactive services and offer to restart them
+# Select option 1 to restart all services
+```
+
+**Option 2: Manual Restart via Command Line**
 ```bash
 # Restart DNSTT server
 systemctl restart dnstt.service
