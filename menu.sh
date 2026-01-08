@@ -1194,7 +1194,7 @@ install_dnstt() {
         echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}DNSTT Server:${C_RESET}     ${dnstt_server_emoji} ${dnstt_server_status} ${C_DIM}(port 5300)${C_RESET}"
         echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}EDNS Proxy:${C_RESET}       ${edns_proxy_emoji} ${edns_proxy_status} ${C_DIM}(port 53)${C_RESET}"
         
-        # Check ports
+        # Check ports - improved detection
         echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
         echo -e "${C_BOLD}${C_BLUE}  🔌 PORT STATUS${C_RESET}"
         echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
@@ -1202,13 +1202,45 @@ install_dnstt() {
         local port5300_status="❌ NOT LISTENING"
         local port53_emoji="🔴"
         local port5300_emoji="🔴"
+        local port53_process=""
+        local port5300_process=""
         
-        if ss -lunp | grep -q ':53\s'; then
+        # Check port 53 - try multiple methods for better detection
+        if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+            port53_status="✅ LISTENING"
+            port53_emoji="🟢"
+            # Try to get process name
+            port53_process=$(ss -lunp 2>/dev/null | grep -E ':(53|:53)\s' | grep -oP 'pid=\K[0-9]+' | head -n 1)
+            if [[ -n "$port53_process" ]]; then
+                port53_process=$(ps -p "$port53_process" -o comm= 2>/dev/null | head -n 1)
+                if [[ -n "$port53_process" ]]; then
+                    port53_status="✅ LISTENING (${port53_process})"
+                fi
+            fi
+        elif netstat -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+            port53_status="✅ LISTENING"
+            port53_emoji="🟢"
+        elif lsof -i UDP:53 2>/dev/null | grep -q LISTEN; then
             port53_status="✅ LISTENING"
             port53_emoji="🟢"
         fi
         
-        if ss -lunp | grep -q ':5300\s'; then
+        # Check port 5300 - try multiple methods for better detection
+        if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+            port5300_status="✅ LISTENING"
+            port5300_emoji="🟢"
+            # Try to get process name
+            port5300_process=$(ss -lunp 2>/dev/null | grep -E ':(5300|:5300)\s' | grep -oP 'pid=\K[0-9]+' | head -n 1)
+            if [[ -n "$port5300_process" ]]; then
+                port5300_process=$(ps -p "$port5300_process" -o comm= 2>/dev/null | head -n 1)
+                if [[ -n "$port5300_process" ]]; then
+                    port5300_status="✅ LISTENING (${port5300_process})"
+                fi
+            fi
+        elif netstat -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+            port5300_status="✅ LISTENING"
+            port5300_emoji="🟢"
+        elif lsof -i UDP:5300 2>/dev/null | grep -q LISTEN; then
             port5300_status="✅ LISTENING"
             port5300_emoji="🟢"
         fi
@@ -1216,16 +1248,39 @@ install_dnstt() {
         echo -e "  ${C_GREEN}3️⃣${C_RESET} ${C_WHITE}Port 53 (UDP):${C_RESET}   ${port53_emoji} ${port53_status}"
         echo -e "  ${C_GREEN}4️⃣${C_RESET} ${C_WHITE}Port 5300 (UDP):${C_RESET} ${port5300_emoji} ${port5300_status}"
         
-        # If services are not active, offer to restart
-        if [[ "$dnstt_server_status" == "❌ INACTIVE" ]] || [[ "$edns_proxy_status" == "❌ INACTIVE" ]]; then
+        # If services are active but ports not listening, show warning
+        if [[ "$edns_proxy_status" == "✅ ACTIVE" ]] && [[ "$port53_emoji" == "🔴" ]]; then
+            echo -e "     ${C_YELLOW}⚠️${C_RESET} ${C_DIM}Service active but port not detected. Service may need restart.${C_RESET}"
+        fi
+        if [[ "$dnstt_server_status" == "✅ ACTIVE" ]] && [[ "$port5300_emoji" == "🔴" ]]; then
+            echo -e "     ${C_YELLOW}⚠️${C_RESET} ${C_DIM}Service active but port not detected. Service may need restart.${C_RESET}"
+        fi
+        
+        # If services are not active OR ports not listening, offer to restart
+        if [[ "$dnstt_server_status" == "❌ INACTIVE" ]] || [[ "$edns_proxy_status" == "❌ INACTIVE" ]] || [[ "$port53_emoji" == "🔴" ]] || [[ "$port5300_emoji" == "🔴" ]]; then
             echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "${C_BOLD}${C_YELLOW}  ⚠️ WARNING: SERVICES NOT RUNNING${C_RESET}"
+            echo -e "${C_BOLD}${C_YELLOW}  ⚠️ WARNING: DNS SERVER NOT WORKING${C_RESET}"
             echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "${C_YELLOW}One or more DNSTT services are not running.${C_RESET}"
+            
+            if [[ "$dnstt_server_status" == "❌ INACTIVE" ]] || [[ "$edns_proxy_status" == "❌ INACTIVE" ]]; then
+                echo -e "${C_YELLOW}One or more DNSTT services are not running.${C_RESET}"
+            fi
+            
+            if [[ "$port53_emoji" == "🔴" ]] || [[ "$port5300_emoji" == "🔴" ]]; then
+                echo -e "${C_YELLOW}One or more required ports are not listening.${C_RESET}"
+                if [[ "$port53_emoji" == "🔴" ]]; then
+                    echo -e "${C_DIM}  • Port 53 (EDNS Proxy) is not listening${C_RESET}"
+                fi
+                if [[ "$port5300_emoji" == "🔴" ]]; then
+                    echo -e "${C_DIM}  • Port 5300 (DNSTT Server) is not listening${C_RESET}"
+                fi
+            fi
+            
             echo -e "\n${C_BLUE}What would you like to do?${C_RESET}"
             echo -e "  ${C_GREEN}1)${C_RESET} 🔄 Restart all DNSTT services"
             echo -e "  ${C_GREEN}2)${C_RESET} 📋 View service logs"
-            echo -e "  ${C_GREEN}3)${C_RESET} ⏭️  Continue (do nothing)"
+            echo -e "  ${C_GREEN}3)${C_RESET} 🔍 Diagnose port issues"
+            echo -e "  ${C_GREEN}4)${C_RESET} ⏭️  Continue (do nothing)"
             read -p "$(echo -e ${C_PROMPT}"👉 Select an option [1]: "${C_RESET})" restart_choice
             restart_choice=${restart_choice:-1}
             
@@ -1277,6 +1332,45 @@ install_dnstt() {
                     fi
                     ;;
                 3)
+                    echo -e "\n${C_BLUE}🔍 Diagnosing port issues...${C_RESET}"
+                    echo -e "\n${C_CYAN}Checking what's using port 53:${C_RESET}"
+                    if command -v ss &> /dev/null; then
+                        ss -lunp | grep -E ':(53|:53)\s' || echo -e "${C_YELLOW}  No process found listening on port 53${C_RESET}"
+                    fi
+                    if command -v netstat &> /dev/null; then
+                        netstat -lunp 2>/dev/null | grep -E ':(53|:53)\s' || echo -e "${C_YELLOW}  (netstat: no process found)${C_RESET}"
+                    fi
+                    if command -v lsof &> /dev/null; then
+                        lsof -i UDP:53 2>/dev/null || echo -e "${C_YELLOW}  (lsof: no process found)${C_RESET}"
+                    fi
+                    
+                    echo -e "\n${C_CYAN}Checking what's using port 5300:${C_RESET}"
+                    if command -v ss &> /dev/null; then
+                        ss -lunp | grep -E ':(5300|:5300)\s' || echo -e "${C_YELLOW}  No process found listening on port 5300${C_RESET}"
+                    fi
+                    if command -v netstat &> /dev/null; then
+                        netstat -lunp 2>/dev/null | grep -E ':(5300|:5300)\s' || echo -e "${C_YELLOW}  (netstat: no process found)${C_RESET}"
+                    fi
+                    if command -v lsof &> /dev/null; then
+                        lsof -i UDP:5300 2>/dev/null || echo -e "${C_YELLOW}  (lsof: no process found)${C_RESET}"
+                    fi
+                    
+                    echo -e "\n${C_CYAN}Checking systemd-resolved status:${C_RESET}"
+                    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+                        echo -e "${C_YELLOW}  ⚠️ systemd-resolved is active and may be blocking port 53${C_RESET}"
+                        echo -e "${C_DIM}  Run: systemctl stop systemd-resolved && systemctl disable systemd-resolved${C_RESET}"
+                    else
+                        echo -e "${C_GREEN}  ✅ systemd-resolved is not active${C_RESET}"
+                    fi
+                    
+                    echo -e "\n${C_CYAN}Checking firewall rules:${C_RESET}"
+                    if command -v ufw &> /dev/null; then
+                        ufw status | grep -E '(53|5300)' || echo -e "${C_DIM}  (No specific UFW rules found for ports 53/5300)${C_RESET}"
+                    elif command -v firewall-cmd &> /dev/null; then
+                        firewall-cmd --list-ports 2>/dev/null | grep -E '(53|5300)' || echo -e "${C_DIM}  (No specific firewalld rules found for ports 53/5300)${C_RESET}"
+                    fi
+                    ;;
+                4)
                     echo -e "${C_DIM}Skipping restart...${C_RESET}"
                     ;;
             esac
