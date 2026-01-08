@@ -8,10 +8,69 @@ fi
 echo "Installing FirewallFalcon Manager..."
 
 MENU_URL="https://raw.githubusercontent.com/Iddy29/MRCYBER255-KITONGA/refs/heads/main/menu.sh"
+MENU_PATH="/usr/local/bin/menu"
 
-wget -q -O /usr/local/bin/menu "$MENU_URL"
-chmod +x /usr/local/bin/menu
+# Check if wget or curl is available
+if command -v wget &> /dev/null; then
+    DOWNLOAD_CMD="wget"
+    DOWNLOAD_FLAGS="-q -O"
+elif command -v curl &> /dev/null; then
+    DOWNLOAD_CMD="curl"
+    DOWNLOAD_FLAGS="-sL -o"
+else
+    echo "Error: Neither wget nor curl is installed. Please install one of them first:"
+    echo "  apt-get update && apt-get install -y wget"
+    echo "  or"
+    echo "  apt-get update && apt-get install -y curl"
+    exit 1
+fi
 
-/usr/local/bin/menu --install-setup
+echo "Downloading menu.sh from repository..."
 
-echo "Installation complete! Type 'menu' to start."
+# Download menu.sh
+if $DOWNLOAD_CMD $DOWNLOAD_FLAGS "$MENU_PATH" "$MENU_URL"; then
+    # Check if download was successful
+    if [[ ! -f "$MENU_PATH" ]] || [[ ! -s "$MENU_PATH" ]]; then
+        echo "Error: Failed to download menu.sh or file is empty."
+        echo "Please check your internet connection and try again."
+        exit 1
+    fi
+    
+    # Check if it's a valid bash script
+    if ! head -n 1 "$MENU_PATH" | grep -q "#!/bin/bash"; then
+        echo "Error: Downloaded file does not appear to be a valid bash script."
+        echo "Please check the repository URL and try again."
+        rm -f "$MENU_PATH"
+        exit 1
+    fi
+    
+    echo "Setting executable permissions..."
+    chmod +x "$MENU_PATH"
+    
+    if [[ ! -x "$MENU_PATH" ]]; then
+        echo "Error: Failed to set executable permissions."
+        exit 1
+    fi
+    
+    echo "Running initial setup..."
+    if "$MENU_PATH" --install-setup; then
+        echo ""
+        echo "✅ Installation complete! Type 'menu' to start."
+    else
+        echo ""
+        echo "⚠️  Warning: Initial setup encountered some issues."
+        echo "You can still try running 'menu' to see if it works."
+        exit 1
+    fi
+else
+    echo "Error: Failed to download menu.sh from repository."
+    echo "URL: $MENU_URL"
+    echo ""
+    echo "Possible issues:"
+    echo "  - Internet connection problem"
+    echo "  - Repository URL is incorrect"
+    echo "  - GitHub is temporarily unavailable"
+    echo ""
+    echo "Please check your internet connection and try again."
+    exit 1
+fi
