@@ -1104,36 +1104,64 @@ EOF
 show_dnstt_details() {
     if [ -f "$DNSTT_CONFIG_FILE" ]; then
         source "$DNSTT_CONFIG_FILE"
-        echo -e "\n${C_GREEN}=====================================================${C_RESET}"
-        echo -e "${C_GREEN}            📡 DNSTT Connection Details             ${C_RESET}"
-        echo -e "${C_GREEN}=====================================================${C_RESET}"
-        echo -e "\n${C_WHITE}Your connection details:${C_RESET}"
-        echo -e "  - ${C_CYAN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
-        echo -e "  - ${C_CYAN}Public Key:${C_RESET}    ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+        echo -e "\n${C_GREEN}╔════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_GREEN}║${C_RESET}        ${C_BOLD}${C_WHITE}📡 DNSTT CONNECTION DETAILS 📡${C_RESET}        ${C_GREEN}║${C_RESET}"
+        echo -e "${C_GREEN}╚════════════════════════════════════════════════════════════╝${C_RESET}"
+        
+        echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "${C_BOLD}${C_CYAN}  🌐 DOMAIN CONFIGURATION${C_RESET}"
+        echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}Tunnel Domain:${C_RESET}     ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+        if [[ "$DNSTT_RECORDS_MANAGED" == "false" && -n "$NS_DOMAIN" ]]; then
+            echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}Nameserver Domain:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+        fi
+        
+        echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "${C_BOLD}${C_CYAN}  🔑 AUTHENTICATION${C_RESET}"
+        echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "  ${C_GREEN}3️⃣${C_RESET} ${C_WHITE}Public Key:${C_RESET}"
+        echo -e "     ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+        
+        echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "${C_BOLD}${C_CYAN}  ⚙️ NETWORK SETTINGS${C_RESET}"
+        echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
         if [[ -n "$FORWARD_DESC" ]]; then
-            echo -e "  - ${C_CYAN}Forwarding To:${C_RESET} ${C_YELLOW}$FORWARD_DESC${C_RESET}"
+            echo -e "  ${C_GREEN}4️⃣${C_RESET} ${C_WHITE}Forwarding Target:${C_RESET} ${C_YELLOW}$FORWARD_DESC${C_RESET}"
         else
-            echo -e "  - ${C_CYAN}Forwarding To:${C_RESET} ${C_YELLOW}Unknown (config_missing)${C_RESET}"
+            echo -e "  ${C_GREEN}4️⃣${C_RESET} ${C_WHITE}Forwarding Target:${C_RESET} ${C_YELLOW}Unknown (config_missing)${C_RESET}"
         fi
         if [[ -n "$MTU_VALUE" ]]; then
-            echo -e "  - ${C_CYAN}MTU Value:${C_RESET}     ${C_YELLOW}$MTU_VALUE${C_RESET}"
+            echo -e "  ${C_GREEN}5️⃣${C_RESET} ${C_WHITE}MTU Value:${C_RESET}        ${C_YELLOW}$MTU_VALUE bytes${C_RESET}"
         fi
-        if [[ "$DNSTT_RECORDS_MANAGED" == "false" && -n "$NS_DOMAIN" ]]; then
-             echo -e "  - ${C_CYAN}NS Record:${C_RESET}     ${C_YELLOW}$NS_DOMAIN${C_RESET}"
-        fi
-        echo -e "  - ${C_CYAN}Server Port:${C_RESET}   ${C_YELLOW}5300 (internal)${C_RESET}"
-        echo -e "  - ${C_CYAN}Public Port:${C_RESET}    ${C_YELLOW}53 (EDNS proxy)${C_RESET}"
-        echo -e "  - ${C_CYAN}EDNS Sizes:${C_RESET}     ${C_YELLOW}External: 512, Internal: 1800 (high speed)${C_RESET}"
+        
+        echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "${C_BOLD}${C_CYAN}  🔌 PORT CONFIGURATION${C_RESET}"
+        echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "  ${C_GREEN}6️⃣${C_RESET} ${C_WHITE}Public Port:${C_RESET}      ${C_YELLOW}53 (UDP)${C_RESET} ${C_DIM}→ EDNS Proxy${C_RESET}"
+        echo -e "  ${C_GREEN}7️⃣${C_RESET} ${C_WHITE}Internal Port:${C_RESET}   ${C_YELLOW}5300 (UDP)${C_RESET} ${C_DIM}→ DNSTT Server${C_RESET}"
+        
+        echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "${C_BOLD}${C_CYAN}  🚀 PERFORMANCE SETTINGS${C_RESET}"
+        echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "  ${C_GREEN}8️⃣${C_RESET} ${C_WHITE}EDNS Sizes:${C_RESET}"
+        echo -e "     ${C_DIM}•${C_RESET} External: ${C_YELLOW}512 bytes${C_RESET} ${C_DIM}(shown to DNS resolvers)${C_RESET}"
+        echo -e "     ${C_DIM}•${C_RESET} Internal: ${C_YELLOW}1800 bytes${C_RESET} ${C_DIM}(high-speed tunnel)${C_RESET}"
         
         if [[ "$FORWARD_DESC" == *"V2Ray"* ]]; then
-             echo -e "  - ${C_CYAN}Action Required:${C_RESET} ${C_YELLOW}Ensure a V2Ray service (vless/vmess/trojan) listens on port 8787 (no TLS)${C_RESET}"
+            echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_BOLD}${C_YELLOW}  ⚠️ ACTION REQUIRED${C_RESET}"
+            echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Ensure a V2Ray service (VLESS/VMESS/Trojan) is listening on port 8787 (no TLS)${C_RESET}"
         elif [[ "$FORWARD_DESC" == *"SSH"* ]]; then
-             echo -e "  - ${C_CYAN}Action Required:${C_RESET} ${C_YELLOW}Ensure your SSH client is configured to use the DNS tunnel.${C_RESET}"
+            echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_BOLD}${C_YELLOW}  ⚠️ ACTION REQUIRED${C_RESET}"
+            echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Configure your SSH client to use the DNS tunnel${C_RESET}"
         fi
         
-        echo -e "\n${C_DIM}Use these details in your client configuration.${C_RESET}"
+        echo -e "\n${C_DIM}${C_ITALIC}💼 Use these details in your client configuration${C_RESET}"
     else
-        echo -e "\n${C_YELLOW}ℹ️ DNSTT configuration file not found. Details are unavailable.${C_RESET}"
+        echo -e "\n${C_YELLOW}⚠️ DNSTT configuration file not found. Details are unavailable.${C_RESET}"
     fi
 }
 
@@ -1145,39 +1173,56 @@ install_dnstt() {
         show_dnstt_details
         
         # Check service status
-        echo -e "\n${C_BLUE}📊 Service Status:${C_RESET}"
+        echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "${C_BOLD}${C_BLUE}  📊 SERVICE STATUS${C_RESET}"
+        echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
         local dnstt_server_status="❌ INACTIVE"
         local edns_proxy_status="❌ INACTIVE"
+        local dnstt_server_emoji="🔴"
+        local edns_proxy_emoji="🔴"
         
         if systemctl is-active --quiet dnstt.service 2>/dev/null; then
             dnstt_server_status="✅ ACTIVE"
+            dnstt_server_emoji="🟢"
         fi
         
         if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
             edns_proxy_status="✅ ACTIVE"
+            edns_proxy_emoji="🟢"
         fi
         
-        echo -e "  - DNSTT Server (port 5300): ${dnstt_server_status}"
-        echo -e "  - EDNS Proxy (port 53):    ${edns_proxy_status}"
+        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}DNSTT Server:${C_RESET}     ${dnstt_server_emoji} ${dnstt_server_status} ${C_DIM}(port 5300)${C_RESET}"
+        echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}EDNS Proxy:${C_RESET}       ${edns_proxy_emoji} ${edns_proxy_status} ${C_DIM}(port 53)${C_RESET}"
         
         # Check ports
-        echo -e "\n${C_BLUE}🔌 Port Status:${C_RESET}"
+        echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "${C_BOLD}${C_BLUE}  🔌 PORT STATUS${C_RESET}"
+        echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        local port53_status="❌ NOT LISTENING"
+        local port5300_status="❌ NOT LISTENING"
+        local port53_emoji="🔴"
+        local port5300_emoji="🔴"
+        
         if ss -lunp | grep -q ':53\s'; then
-            echo -e "  - Port 53:   ✅ LISTENING"
-        else
-            echo -e "  - Port 53:   ❌ NOT LISTENING"
+            port53_status="✅ LISTENING"
+            port53_emoji="🟢"
         fi
         
         if ss -lunp | grep -q ':5300\s'; then
-            echo -e "  - Port 5300: ✅ LISTENING"
-        else
-            echo -e "  - Port 5300: ❌ NOT LISTENING"
+            port5300_status="✅ LISTENING"
+            port5300_emoji="🟢"
         fi
+        
+        echo -e "  ${C_GREEN}3️⃣${C_RESET} ${C_WHITE}Port 53 (UDP):${C_RESET}   ${port53_emoji} ${port53_status}"
+        echo -e "  ${C_GREEN}4️⃣${C_RESET} ${C_WHITE}Port 5300 (UDP):${C_RESET} ${port5300_emoji} ${port5300_status}"
         
         # If services are not active, offer to restart
         if [[ "$dnstt_server_status" == "❌ INACTIVE" ]] || [[ "$edns_proxy_status" == "❌ INACTIVE" ]]; then
-            echo -e "\n${C_YELLOW}⚠️ One or more services are not running.${C_RESET}"
-            echo -e "${C_BLUE}What would you like to do?${C_RESET}"
+            echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_BOLD}${C_YELLOW}  ⚠️ WARNING: SERVICES NOT RUNNING${C_RESET}"
+            echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_YELLOW}One or more DNSTT services are not running.${C_RESET}"
+            echo -e "\n${C_BLUE}What would you like to do?${C_RESET}"
             echo -e "  ${C_GREEN}1)${C_RESET} 🔄 Restart all DNSTT services"
             echo -e "  ${C_GREEN}2)${C_RESET} 📋 View service logs"
             echo -e "  ${C_GREEN}3)${C_RESET} ⏭️  Continue (do nothing)"
@@ -1206,19 +1251,21 @@ install_dnstt() {
                     fi
                     
                     sleep 2
-                    echo -e "\n${C_BLUE}📊 Updated Status:${C_RESET}"
+                    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+                    echo -e "${C_BOLD}${C_BLUE}  📊 UPDATED STATUS${C_RESET}"
+                    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
                     if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                        echo -e "  - DNSTT Server: ✅ ACTIVE"
+                        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}DNSTT Server:${C_RESET}     🟢 ✅ ACTIVE"
                     else
-                        echo -e "  - DNSTT Server: ❌ INACTIVE"
-                        echo -e "${C_YELLOW}💡 Check logs: journalctl -u dnstt.service -n 20${C_RESET}"
+                        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}DNSTT Server:${C_RESET}     🔴 ❌ INACTIVE"
+                        echo -e "     ${C_YELLOW}💡${C_RESET} ${C_DIM}Check logs: journalctl -u dnstt.service -n 20${C_RESET}"
                     fi
                     
                     if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                        echo -e "  - EDNS Proxy:   ✅ ACTIVE"
+                        echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}EDNS Proxy:${C_RESET}       🟢 ✅ ACTIVE"
                     else
-                        echo -e "  - EDNS Proxy:   ❌ INACTIVE"
-                        echo -e "${C_YELLOW}💡 Check logs: journalctl -u dnstt-edns-proxy.service -n 20${C_RESET}"
+                        echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}EDNS Proxy:${C_RESET}       🔴 ❌ INACTIVE"
+                        echo -e "     ${C_YELLOW}💡${C_RESET} ${C_DIM}Check logs: journalctl -u dnstt-edns-proxy.service -n 20${C_RESET}"
                     fi
                     ;;
                 2)
@@ -1234,7 +1281,10 @@ install_dnstt() {
                     ;;
             esac
         else
-            echo -e "\n${C_GREEN}✅ All DNSTT services are running correctly!${C_RESET}"
+            echo -e "\n${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_BOLD}${C_GREEN}  ✅ ALL SERVICES RUNNING CORRECTLY${C_RESET}"
+            echo -e "${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "  ${C_GREEN}🎉${C_RESET} ${C_WHITE}All DNSTT services are active and ports are listening!${C_RESET}"
         fi
         
         return
