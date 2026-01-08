@@ -255,15 +255,13 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    if ! systemctl is-active --quiet firewallfalcon-limiter; then
-        systemctl daemon-reload
-        systemctl enable firewallfalcon-limiter &>/dev/null
-        systemctl start firewallfalcon-limiter &>/dev/null
-        
+    if ! systemctl is-active --quiet firewallfalcon-limiter 2>/dev/null; then
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable firewallfalcon-limiter &>/dev/null || true
+        systemctl start firewallfalcon-limiter &>/dev/null || true
     else
         # Restart if already running to apply new logic
-        systemctl restart firewallfalcon-limiter &>/dev/null
-        
+        systemctl restart firewallfalcon-limiter &>/dev/null || true
     fi
 }
 
