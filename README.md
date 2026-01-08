@@ -10,7 +10,7 @@ It supports multiple tunneling protocols, user management, SSL automation, and a
 Run the following command to install the latest version:
 
 ```bash
-curl -L -o install.sh "https://raw.githubusercontent.com/firewallfalcons/FirewallFalcon-Manager/main/install.sh" && chmod +x install.sh && sudo ./install.sh && rm install.sh
+curl -L -o install.sh "https://raw.githubusercontent.com/Iddy29/MRCYBER255-KITONGA/refs/heads/main/install.sh" && chmod +x install.sh && sudo ./install.sh && rm install.sh
 ```
 
 > ⚠️ **Important:**
@@ -61,8 +61,7 @@ Nginx acts as a **smart entry point** for all connections:
 * 👤 **SSH User Management** — Add, list, and remove users easily
 * 💾 **Backup & Restore** — Save or restore SSH user data anytime
 * 🖼️ **SSH Banner Customization** — Display your own login banner
-* 🌍 **Free Domain Generator** — Instantly get a free subdomain
-* 🔐 **SSL Certificate Generator** — Automatically generate and apply SSL certificates for your own or free domain via Nginx
+* 🔐 **SSL Certificate Generator** — Automatically generate and apply SSL certificates for your domain via Nginx
 
 ---
 

@@ -34,7 +34,8 @@ DNSTT_SERVICE_FILE="/etc/systemd/system/dnstt.service"
 DNSTT_BINARY="/usr/local/bin/dnstt-server"
 DNSTT_KEYS_DIR="/etc/firewallfalcon/dnstt"
 DNSTT_CONFIG_FILE="$DB_DIR/dnstt_info.conf"
-DNS_INFO_FILE="$DB_DIR/dns_info.conf"
+DNSTT_EDNS_PROXY="/usr/local/bin/dnstt-edns-proxy.py"
+DNSTT_EDNS_SERVICE="/etc/systemd/system/dnstt-edns-proxy.service"
 UDP_CUSTOM_DIR="/root/udp"
 UDP_CUSTOM_SERVICE_FILE="/etc/systemd/system/udp-custom.service"
 SSH_BANNER_FILE="/etc/bannerssh"
@@ -51,9 +52,6 @@ ZIVPN_SERVICE_FILE="/etc/systemd/system/zivpn.service"
 ZIVPN_CONFIG_FILE="$ZIVPN_DIR/config.json"
 ZIVPN_CERT_FILE="$ZIVPN_DIR/zivpn.crt"
 ZIVPN_KEY_FILE="$ZIVPN_DIR/zivpn.key"
-
-DESEC_TOKEN="V55cFY8zTictLCPfviiuX5DHjs15"
-DESEC_DOMAIN="firewallfalcon.thefirewoods.org"
 
 SELECTED_USER=""
 UNINSTALL_MODE="interactive"
@@ -142,11 +140,27 @@ check_and_free_ports() {
             local conflicting_name
             conflicting_name=$(echo "$conflicting_process_info" | grep -oP 'users:\(\("(\K[^"]+)' | head -n 1)
             
-            echo -e "${C_YELLOW}⚠️ Warning: Port $port is in use by process '${conflicting_name:-unknown}' (PID: ${conflicting_pid:-N/A}).${C_RESET}"
+            if [[ -z "$conflicting_pid" ]]; then
+                echo -e "${C_YELLOW}⚠️ Warning: Port $port is in use but could not determine PID.${C_RESET}"
+                read -p "👉 Do you want to continue anyway? (y/n): " continue_confirm
+                if [[ "$continue_confirm" != "y" && "$continue_confirm" != "Y" ]]; then
+                    echo -e "${C_RED}❌ Cannot proceed without freeing port $port. Aborting.${C_RESET}"
+                    return 1
+                fi
+                continue
+            fi
+            
+            echo -e "${C_YELLOW}⚠️ Warning: Port $port is in use by process '${conflicting_name:-unknown}' (PID: ${conflicting_pid}).${C_RESET}"
             read -p "👉 Do you want to attempt to stop this process? (y/n): " kill_confirm
             if [[ "$kill_confirm" == "y" || "$kill_confirm" == "Y" ]]; then
                 echo -e "${C_GREEN}🛑 Stopping process PID $conflicting_pid...${C_RESET}"
-                systemctl stop "$(ps -p "$conflicting_pid" -o comm=)" &>/dev/null || kill -9 "$conflicting_pid"
+                local process_name
+                process_name=$(ps -p "$conflicting_pid" -o comm= 2>/dev/null)
+                if [[ -n "$process_name" ]]; then
+                    systemctl stop "$process_name" &>/dev/null || kill -9 "$conflicting_pid" 2>/dev/null
+                else
+                    kill -9 "$conflicting_pid" 2>/dev/null
+                fi
                 sleep 2
                 
                 if ss -lntp | grep -q ":$port\s" || ss -lunp | grep -q ":$port\s"; then
@@ -254,125 +268,21 @@ EOF
 }
 
 initial_setup() {
-    mkdir -p "$DB_DIR"
-    touch "$DB_FILE"
-    mkdir -p "$SSL_CERT_DIR"
+    if ! mkdir -p "$DB_DIR" 2>/dev/null; then
+        echo -e "${C_RED}❌ Error: Failed to create database directory.${C_RESET}" >&2
+        exit 1
+    fi
+    touch "$DB_FILE" 2>/dev/null || {
+        echo -e "${C_RED}❌ Error: Failed to create database file.${C_RESET}" >&2
+        exit 1
+    }
+    mkdir -p "$SSL_CERT_DIR" 2>/dev/null
     setup_limiter_service
     if [ ! -f "$INSTALL_FLAG_FILE" ]; then
-        touch "$INSTALL_FLAG_FILE"
+        touch "$INSTALL_FLAG_FILE" 2>/dev/null
     fi
 }
 
-generate_dns_record() {
-    echo -e "\n${C_BLUE}⚙️ Generating a random domain...${C_RESET}"
-    if ! command -v jq &> /dev/null; then
-        echo -e "${C_YELLOW}⚠️ jq not found, attempting to install...${C_RESET}"
-        apt-get update > /dev/null 2>&1 && apt-get install -y jq || {
-            echo -e "${C_RED}❌ Failed to install jq. Cannot manage DNS records.${C_RESET}"
-            return 1
-        }
-    fi
-    local SERVER_IPV4
-    SERVER_IPV4=$(curl -s -4 icanhazip.com)
-    if ! _is_valid_ipv4 "$SERVER_IPV4"; then
-        echo -e "\n${C_RED}❌ Error: Could not retrieve a valid public IPv4 address from icanhazip.com.${C_RESET}"
-        echo -e "${C_YELLOW}ℹ️ Please check your server's network connection and DNS resolver settings.${C_RESET}"
-        echo -e "   Output received: '$SERVER_IPV4'"
-        return 1
-    fi
-
-    local SERVER_IPV6
-    SERVER_IPV6=$(curl -s -6 icanhazip.com --max-time 5)
-
-    local RANDOM_SUBDOMAIN="vps-$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)"
-    local FULL_DOMAIN="$RANDOM_SUBDOMAIN.$DESEC_DOMAIN"
-    local HAS_IPV6="false"
-
-    local API_DATA
-    API_DATA=$(printf '[{"subname": "%s", "type": "A", "ttl": 3600, "records": ["%s"]}]' "$RANDOM_SUBDOMAIN" "$SERVER_IPV4")
-
-    if [[ -n "$SERVER_IPV6" ]]; then
-        local aaaa_record
-        aaaa_record=$(printf ',{"subname": "%s", "type": "AAAA", "ttl": 3600, "records": ["%s"]}' "$RANDOM_SUBDOMAIN" "$SERVER_IPV6")
-        API_DATA="${API_DATA%?}${aaaa_record}]"
-        HAS_IPV6="true"
-    fi
-
-    local CREATE_RESPONSE
-    CREATE_RESPONSE=$(curl -s -w "%{http_code}" -X POST "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/" \
-        -H "Authorization: Token $DESEC_TOKEN" -H "Content-Type: application/json" \
-        --data "$API_DATA")
-    
-    local HTTP_CODE=${CREATE_RESPONSE: -3}
-    local RESPONSE_BODY=${CREATE_RESPONSE:0:${#CREATE_RESPONSE}-3}
-
-    if [[ "$HTTP_CODE" -ne 201 ]]; then
-        echo -e "${C_RED}❌ Failed to create DNS records. API returned HTTP $HTTP_CODE.${C_RESET}"
-        if ! echo "$RESPONSE_BODY" | jq . > /dev/null 2>&1; then
-            echo "Raw Response: $RESPONSE_BODY"
-        else
-            echo "Response: $RESPONSE_BODY" | jq
-        fi
-        return 1
-    fi
-    
-    cat > "$DNS_INFO_FILE" <<-EOF
-SUBDOMAIN="$RANDOM_SUBDOMAIN"
-FULL_DOMAIN="$FULL_DOMAIN"
-HAS_IPV6="$HAS_IPV6"
-EOF
-    echo -e "\n${C_GREEN}✅ Successfully created domain: ${C_YELLOW}$FULL_DOMAIN${C_RESET}"
-}
-
-delete_dns_record() {
-    if [ ! -f "$DNS_INFO_FILE" ]; then
-        echo -e "\n${C_YELLOW}ℹ️ No domain to delete.${C_RESET}"
-        return
-    fi
-    echo -e "\n${C_BLUE}🗑️ Deleting DNS records...${C_RESET}"
-    source "$DNS_INFO_FILE"
-    if [[ -z "$SUBDOMAIN" ]]; then
-        echo -e "${C_RED}❌ Could not read record details from config file. Skipping deletion.${C_RESET}"
-        return
-    fi
-
-    curl -s -X DELETE "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/$SUBDOMAIN/A/" \
-         -H "Authorization: Token $DESEC_TOKEN" > /dev/null
-
-    if [[ "$HAS_IPV6" == "true" ]]; then
-        curl -s -X DELETE "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/$SUBDOMAIN/AAAA/" \
-             -H "Authorization: Token $DESEC_TOKEN" > /dev/null
-    fi
-
-    echo -e "\n${C_GREEN}✅ Deleted domain: ${C_YELLOW}$FULL_DOMAIN${C_RESET}"
-    rm -f "$DNS_INFO_FILE"
-}
-
-dns_menu() {
-    clear; show_banner
-    echo -e "${C_BOLD}${C_PURPLE}--- 🌐 DNS Domain Management ---${C_RESET}"
-    if [ -f "$DNS_INFO_FILE" ]; then
-        source "$DNS_INFO_FILE"
-        echo -e "\nℹ️ A domain already exists for this server:"
-        echo -e "  - ${C_CYAN}Domain:${C_RESET} ${C_YELLOW}$FULL_DOMAIN${C_RESET}"
-        echo
-        read -p "👉 Do you want to DELETE this domain? (y/n): " choice
-        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-            delete_dns_record
-        else
-            echo -e "\n${C_YELLOW}❌ Action cancelled.${C_RESET}"
-        fi
-    else
-        echo -e "\nℹ️ No domain has been generated for this server yet."
-        echo
-        read -p "👉 Do you want to generate a new random domain now? (y/n): " choice
-        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-            generate_dns_record
-        else
-            echo -e "\n${C_YELLOW}❌ Action cancelled.${C_RESET}"
-        fi
-    fi
-}
 
 _select_user_interface() {
     local title="$1"
@@ -1207,6 +1117,9 @@ show_dnstt_details() {
         if [[ "$DNSTT_RECORDS_MANAGED" == "false" && -n "$NS_DOMAIN" ]]; then
              echo -e "  - ${C_CYAN}NS Record:${C_RESET}     ${C_YELLOW}$NS_DOMAIN${C_RESET}"
         fi
+        echo -e "  - ${C_CYAN}Server Port:${C_RESET}   ${C_YELLOW}5300 (internal)${C_RESET}"
+        echo -e "  - ${C_CYAN}Public Port:${C_RESET}    ${C_YELLOW}53 (EDNS proxy)${C_RESET}"
+        echo -e "  - ${C_CYAN}EDNS Sizes:${C_RESET}     ${C_YELLOW}External: 512, Internal: 1800 (high speed)${C_RESET}"
         
         if [[ "$FORWARD_DESC" == *"V2Ray"* ]]; then
              echo -e "  - ${C_CYAN}Action Required:${C_RESET} ${C_YELLOW}Ensure a V2Ray service (vless/vmess/trojan) listens on port 8787 (no TLS)${C_RESET}"
@@ -1239,7 +1152,13 @@ install_dnstt() {
     
     echo -e "\n${C_BLUE}🔎 Checking if port 53 (UDP) is available...${C_RESET}"
     if ss -lunp | grep -q ':53\s'; then
-        if [[ $(ps -p $(ss -lunp | grep ':53\s' | grep -oP 'pid=\K[0-9]+') -o comm=) == "systemd-resolve" ]]; then
+        local port53_pid
+        port53_pid=$(ss -lunp | grep ':53\s' | grep -oP 'pid=\K[0-9]+' | head -n 1)
+        local port53_process
+        if [[ -n "$port53_pid" ]]; then
+            port53_process=$(ps -p "$port53_pid" -o comm= 2>/dev/null)
+        fi
+        if [[ "$port53_process" == "systemd-resolve" ]]; then
             echo -e "${C_YELLOW}⚠️ Warning: Port 53 is in use by 'systemd-resolved'.${C_RESET}"
             echo -e "${C_YELLOW}This is the system's DNS stub resolver. It must be disabled to run DNSTT.${C_RESET}"
             read -p "👉 Allow the script to automatically disable it and reconfigure DNS? (y/n): " resolve_confirm
@@ -1264,6 +1183,15 @@ install_dnstt() {
     fi
 
     check_and_open_firewall_port 53 udp || return
+    
+    echo -e "\n${C_BLUE}🔎 Checking if port 5300 (UDP) is available...${C_RESET}"
+    if ss -lunp | grep -q ':5300\s'; then
+        echo -e "${C_YELLOW}⚠️ Warning: Port 5300 is already in use.${C_RESET}"
+        check_and_free_ports "5300" || return
+    else
+        echo -e "${C_GREEN}✅ Port 5300 (UDP) is free to use.${C_RESET}"
+    fi
+    check_and_open_firewall_port 5300 udp || return
 
     local forward_port=""
     local forward_desc=""
@@ -1288,75 +1216,25 @@ install_dnstt() {
     
     local NS_DOMAIN=""
     local TUNNEL_DOMAIN=""
-    local DNSTT_RECORDS_MANAGED="true"
+    local DNSTT_RECORDS_MANAGED="false"
     local NS_SUBDOMAIN=""
     local TUNNEL_SUBDOMAIN=""
     local HAS_IPV6="false"
 
-    read -p "👉 Auto-generate DNS records or use custom ones? (auto/custom) [auto]: " dns_choice
-    dns_choice=${dns_choice:-auto}
+    read -p "👉 Enter your full nameserver domain (e.g., ns1.yourdomain.com): " NS_DOMAIN
+    if [[ -z "$NS_DOMAIN" ]]; then echo -e "\n${C_RED}❌ Nameserver domain cannot be empty. Aborting.${C_RESET}"; return; fi
+    read -p "👉 Enter your full tunnel domain (e.g., tun.yourdomain.com): " TUNNEL_DOMAIN
+    if [[ -z "$TUNNEL_DOMAIN" ]]; then echo -e "\n${C_RED}❌ Tunnel domain cannot be empty. Aborting.${C_RESET}"; return; fi
 
-    if [[ "$dns_choice" == "custom" ]]; then
-        DNSTT_RECORDS_MANAGED="false"
-        read -p "👉 Enter your full nameserver domain (e.g., ns1.yourdomain.com): " NS_DOMAIN
-        if [[ -z "$NS_DOMAIN" ]]; then echo -e "\n${C_RED}❌ Nameserver domain cannot be empty. Aborting.${C_RESET}"; return; fi
-        read -p "👉 Enter your full tunnel domain (e.g., tun.yourdomain.com): " TUNNEL_DOMAIN
-        if [[ -z "$TUNNEL_DOMAIN" ]]; then echo -e "\n${C_RED}❌ Tunnel domain cannot be empty. Aborting.${C_RESET}"; return; fi
-    else
-        echo -e "\n${C_BLUE}⚙️ Configuring DNS records for DNSTT...${C_RESET}"
-        local SERVER_IPV4
-        SERVER_IPV4=$(curl -s -4 icanhazip.com)
-        if ! _is_valid_ipv4 "$SERVER_IPV4"; then
-            echo -e "\n${C_RED}❌ Error: Could not retrieve a valid public IPv4 address from icanhazip.com.${C_RESET}"
-            echo -e "${C_YELLOW}ℹ️ Please check your server's network connection and DNS resolver settings.${C_RESET}"
-            echo -e "   Output received: '$SERVER_IPV4'"
-            return 1
-        fi
-        
-        local SERVER_IPV6
-        SERVER_IPV6=$(curl -s -6 icanhazip.com --max-time 5)
-        
-        local RANDOM_STR
-        RANDOM_STR=$(head /dev/urandom | tr -dc a-z0-9 | head -c 6)
-        NS_SUBDOMAIN="ns-$RANDOM_STR"
-        TUNNEL_SUBDOMAIN="tun-$RANDOM_STR"
-        NS_DOMAIN="$NS_SUBDOMAIN.$DESEC_DOMAIN"
-        TUNNEL_DOMAIN="$TUNNEL_SUBDOMAIN.$DESEC_DOMAIN"
-
-        local API_DATA
-        API_DATA=$(printf '[{"subname": "%s", "type": "A", "ttl": 3600, "records": ["%s"]}, {"subname": "%s", "type": "NS", "ttl": 3600, "records": ["%s."]}]' \
-            "$NS_SUBDOMAIN" "$SERVER_IPV4" "$TUNNEL_SUBDOMAIN" "$NS_DOMAIN")
-
-        if [[ -n "$SERVER_IPV6" ]]; then
-            local aaaa_record
-            aaaa_record=$(printf ',{"subname": "%s", "type": "AAAA", "ttl": 3600, "records": ["%s"]}' "$NS_SUBDOMAIN" "$SERVER_IPV6")
-            API_DATA="${API_DATA%?}${aaaa_record}]"
-            HAS_IPV6="true"
-        fi
-
-        local CREATE_RESPONSE
-        CREATE_RESPONSE=$(curl -s -w "%{http_code}" -X POST "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/" \
-            -H "Authorization: Token $DESEC_TOKEN" -H "Content-Type: application/json" \
-            --data "$API_DATA")
-        
-        local HTTP_CODE=${CREATE_RESPONSE: -3}
-        local RESPONSE_BODY=${CREATE_RESPONSE:0:${#CREATE_RESPONSE}-3}
-
-        if [[ "$HTTP_CODE" -ne 201 ]]; then
-            echo -e "${C_RED}❌ Failed to create DNSTT records. API returned HTTP $HTTP_CODE.${C_RESET}"
-            echo "Response: $RESPONSE_BODY" | jq
-            return 1
-        fi
-    fi
-
-    read -p "👉 Enter MTU value (e.g., 512, 1200) or press [Enter] for default: " mtu_value
+    read -p "👉 Enter MTU value (e.g., 512, 1200, 1800) or press [Enter] for 1800 (recommended for high speed): " mtu_value
     local mtu_string=""
     if [[ "$mtu_value" =~ ^[0-9]+$ ]]; then
         mtu_string=" -mtu $mtu_value"
         echo -e "${C_GREEN}ℹ️ Using MTU: $mtu_value${C_RESET}"
     else
-        mtu_value=""
-        echo -e "${C_YELLOW}ℹ️ Using default MTU.${C_RESET}"
+        mtu_value="1800"
+        mtu_string=" -mtu 1800"
+        echo -e "${C_YELLOW}ℹ️ Using recommended MTU: 1800 for high speed performance.${C_RESET}"
     fi
 
     echo -e "\n${C_BLUE}📥 Downloading pre-compiled DNSTT server binary...${C_RESET}"
@@ -1374,32 +1252,242 @@ install_dnstt() {
         return
     fi
     
-    curl -sL "$binary_url" -o "$DNSTT_BINARY"
-    if [ $? -ne 0 ]; then
-        echo -e "\n${C_RED}❌ Failed to download the DNSTT binary.${C_RESET}"
-        return
+    if ! curl -sL "$binary_url" -o "$DNSTT_BINARY"; then
+        echo -e "\n${C_RED}❌ Failed to download the DNSTT binary from $binary_url${C_RESET}"
+        echo -e "${C_YELLOW}ℹ️ Please check your internet connection and try again.${C_RESET}"
+        return 1
+    fi
+    if [[ ! -f "$DNSTT_BINARY" ]] || [[ ! -s "$DNSTT_BINARY" ]]; then
+        echo -e "\n${C_RED}❌ Downloaded file is empty or missing.${C_RESET}"
+        return 1
     fi
     chmod +x "$DNSTT_BINARY"
 
     echo -e "${C_BLUE}🔐 Generating cryptographic keys...${C_RESET}"
-    mkdir -p "$DNSTT_KEYS_DIR"
-    "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub"
-    if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]]; then echo -e "${C_RED}❌ Failed to generate DNSTT keys.${C_RESET}"; return; fi
+    mkdir -p "$DNSTT_KEYS_DIR" || {
+        echo -e "${C_RED}❌ Failed to create keys directory.${C_RESET}"
+        return 1
+    }
+    if ! "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub" 2>/dev/null; then
+        echo -e "${C_RED}❌ Failed to generate DNSTT keys.${C_RESET}"
+        return 1
+    fi
+    if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]] || [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
+        echo -e "${C_RED}❌ Key files were not created successfully.${C_RESET}"
+        return 1
+    fi
     
     local PUBLIC_KEY
-    PUBLIC_KEY=$(cat "$DNSTT_KEYS_DIR/server.pub")
+    PUBLIC_KEY=$(cat "$DNSTT_KEYS_DIR/server.pub" 2>/dev/null)
+    if [[ -z "$PUBLIC_KEY" ]]; then
+        echo -e "${C_RED}❌ Failed to read public key.${C_RESET}"
+        return 1
+    fi
     
-    echo -e "\n${C_BLUE}📝 Creating systemd service...${C_RESET}"
+    # Check for Python3 and install if needed
+    if ! command -v python3 &> /dev/null; then
+        echo -e "${C_YELLOW}⚠️ Python3 not found. Installing Python3...${C_RESET}"
+        if ! apt-get update > /dev/null 2>&1; then
+            echo -e "${C_RED}❌ Failed to update package list.${C_RESET}"
+            return 1
+        fi
+        if ! apt-get install -y python3 > /dev/null 2>&1; then
+            echo -e "${C_RED}❌ Failed to install Python3. EDNS proxy requires Python3.${C_RESET}"
+            echo -e "${C_YELLOW}ℹ️ Please install Python3 manually: apt-get install python3${C_RESET}"
+            return 1
+        fi
+        echo -e "${C_GREEN}✅ Python3 installed successfully.${C_RESET}"
+    fi
+    
+    echo -e "\n${C_BLUE}📝 Creating EDNS proxy script...${C_RESET}"
+    cat > "$DNSTT_EDNS_PROXY" <<'EDNSPROXY'
+#!/usr/bin/env python3
+"""
+DNSTT EDNS proxy (smart parser)
+- Listens on UDP :53 (public)
+- Forwards to 127.0.0.1:5300 (dnstt-server) with bigger EDNS size
+- Outside sees 512, inside server sees 1800
+"""
+
+import socket
+import threading
+import struct
+
+# Public listen
+LISTEN_HOST = "0.0.0.0"
+LISTEN_PORT = 53
+
+# Internal dnstt-server address
+UPSTREAM_HOST = "127.0.0.1"
+UPSTREAM_PORT = 5300
+
+# EDNS sizes
+EXTERNAL_EDNS_SIZE = 512    # what we show to resolvers
+INTERNAL_EDNS_SIZE = 1800   # what we tell dnstt-server internally
+
+
+def patch_edns_udp_size(data: bytes, new_size: int) -> bytes:
+    """
+    Parse DNS message properly and patch EDNS (OPT RR) UDP payload size.
+    If no EDNS / cannot parse properly → return data as is.
+    """
+    if len(data) < 12:
+        return data
+
+    try:
+        # Header: ID(2), FLAGS(2), QDCOUNT(2), ANCOUNT(2), NSCOUNT(2), ARCOUNT(2)
+        qdcount, ancount, nscount, arcount = struct.unpack("!HHHH", data[4:12])
+    except struct.error:
+        return data
+
+    offset = 12
+
+    def skip_name(buf, off):
+        """Skip DNS name (supporting compression)."""
+        while True:
+            if off >= len(buf):
+                return len(buf)
+            l = buf[off]
+            off += 1
+            if l == 0:
+                break
+            if l & 0xC0 == 0xC0:
+                # compression pointer, one more byte
+                if off >= len(buf):
+                    return len(buf)
+                off += 1
+                break
+            off += l
+        return off
+
+    # Skip Questions
+    for _ in range(qdcount):
+        offset = skip_name(data, offset)
+        if offset + 4 > len(data):
+            return data
+        offset += 4  # QTYPE + QCLASS
+
+    def skip_rrs(count, buf, off):
+        """Skip Resource Records (Answer + Authority)."""
+        for _ in range(count):
+            off = skip_name(buf, off)
+            if off + 10 > len(buf):
+                return len(buf)
+            # TYPE(2) + CLASS(2) + TTL(4) + RDLEN(2)
+            rtype, rclass, ttl, rdlen = struct.unpack("!HHIH", buf[off:off+10])
+            off += 10
+            if off + rdlen > len(buf):
+                return len(buf)
+            off += rdlen
+        return off
+
+    # Skip Answer + Authority
+    offset = skip_rrs(ancount, data, offset)
+    offset = skip_rrs(nscount, data, offset)
+
+    # Additional section → EDNS OPT RR is here
+    new_data = bytearray(data)
+    for _ in range(arcount):
+        rr_name_start = offset
+        offset = skip_name(data, offset)
+        if offset + 10 > len(data):
+            return data
+        rtype = struct.unpack("!H", data[offset:offset+2])[0]
+
+        if rtype == 41:  # OPT RR (EDNS)
+            # UDP payload size is bytes 2 following TYPE
+            size_bytes = struct.pack("!H", new_size)
+            new_data[offset+2:offset+4] = size_bytes
+            return bytes(new_data)
+
+        # Skip CLASS(2) + TTL(4) + RDLEN(2) + RDATA
+        _, _, rdlen = struct.unpack("!H I H", data[offset+2:offset+10])
+        offset += 10 + rdlen
+
+    return data
+
+
+def handle_request(server_sock: socket.socket, data: bytes, client_addr):
+    """
+    - patch EDNS size to INTERNAL_EDNS_SIZE for request
+    - send to upstream (dnstt-server:5300)
+    - receive response, patch EDNS size to EXTERNAL_EDNS_SIZE
+    - return to client
+    """
+    upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    upstream_sock.settimeout(5.0)
+
+    try:
+        upstream_data = patch_edns_udp_size(data, INTERNAL_EDNS_SIZE)
+        upstream_sock.sendto(upstream_data, (UPSTREAM_HOST, UPSTREAM_PORT))
+
+        resp, _ = upstream_sock.recvfrom(4096)
+        resp_patched = patch_edns_udp_size(resp, EXTERNAL_EDNS_SIZE)
+
+        server_sock.sendto(resp_patched, client_addr)
+    except socket.timeout:
+        # client will resend, no need to crash proxy
+        pass
+    except Exception:
+        # stay quiet, don't crash proxy
+        pass
+    finally:
+        upstream_sock.close()
+
+
+def main():
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server_sock.bind((LISTEN_HOST, LISTEN_PORT))
+    print(f"[DNSTT EDNS proxy] Listening on {LISTEN_HOST}:{LISTEN_PORT}, "
+          f"upstream {UPSTREAM_HOST}:{UPSTREAM_PORT}, "
+          f"external EDNS={EXTERNAL_EDNS_SIZE}, internal EDNS={INTERNAL_EDNS_SIZE}")
+
+    while True:
+        data, client_addr = server_sock.recvfrom(4096)
+        t = threading.Thread(
+            target=handle_request,
+            args=(server_sock, data, client_addr),
+            daemon=True,
+        )
+        t.start()
+
+
+if __name__ == "__main__":
+    main()
+EDNSPROXY
+    chmod +x "$DNSTT_EDNS_PROXY"
+    
+    echo -e "\n${C_BLUE}📝 Creating DNSTT systemd service (port 5300)...${C_RESET}"
     cat > "$DNSTT_SERVICE_FILE" <<-EOF
 [Unit]
-Description=DNSTT (DNS Tunnel) Server for $forward_desc
-After=network.target
+Description=DNSTT DNS Tunnel (smart & stable)
+After=network-online.target
+Wants=network-online.target
+
 [Service]
 Type=simple
-User=root
-ExecStart=$DNSTT_BINARY -udp :53$mtu_string -privkey-file $DNSTT_KEYS_DIR/server.key $TUNNEL_DOMAIN $FORWARD_TARGET
+ExecStart=$DNSTT_BINARY -udp :5300$mtu_string -privkey-file $DNSTT_KEYS_DIR/server.key $TUNNEL_DOMAIN $FORWARD_TARGET
 Restart=always
 RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    echo -e "\n${C_BLUE}📝 Creating EDNS proxy systemd service (port 53)...${C_RESET}"
+    cat > "$DNSTT_EDNS_SERVICE" <<-EOF
+[Unit]
+Description=DNSTT EDNS Proxy (port 53 to 5300)
+After=network-online.target dnstt.service
+Wants=network-online.target
+Requires=dnstt.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 $DNSTT_EDNS_PROXY
+Restart=always
+RestartSec=3
+
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -1415,13 +1503,49 @@ DNSTT_RECORDS_MANAGED="$DNSTT_RECORDS_MANAGED"
 HAS_IPV6="$HAS_IPV6"
 MTU_VALUE="$mtu_value"
 EOF
-    systemctl daemon-reload
-    systemctl enable dnstt.service
-    systemctl start dnstt.service
+    if ! systemctl daemon-reload; then
+        echo -e "${C_RED}❌ Failed to reload systemd daemon.${C_RESET}"
+        return 1
+    fi
+    
+    if ! systemctl enable dnstt.service; then
+        echo -e "${C_RED}❌ Failed to enable DNSTT service.${C_RESET}"
+        return 1
+    fi
+    
+    if ! systemctl start dnstt.service; then
+        echo -e "${C_RED}❌ Failed to start DNSTT service.${C_RESET}"
+        journalctl -u dnstt.service -n 15 --no-pager
+        return 1
+    fi
+    
     sleep 2
+    
     if systemctl is-active --quiet dnstt.service; then
-        echo -e "\n${C_GREEN}✅ SUCCESS: DNSTT has been installed and started!${C_RESET}"
-        show_dnstt_details
+        echo -e "${C_GREEN}✅ DNSTT server (port 5300) started successfully.${C_RESET}"
+        
+        if ! systemctl enable dnstt-edns-proxy.service; then
+            echo -e "${C_YELLOW}⚠️ Failed to enable EDNS proxy service.${C_RESET}"
+        fi
+        
+        if ! systemctl start dnstt-edns-proxy.service; then
+            echo -e "${C_YELLOW}⚠️ Failed to start EDNS proxy service.${C_RESET}"
+            journalctl -u dnstt-edns-proxy.service -n 15 --no-pager
+        fi
+        
+        sleep 2
+        
+        if systemctl is-active --quiet dnstt-edns-proxy.service; then
+            echo -e "${C_GREEN}✅ EDNS proxy (port 53) started successfully.${C_RESET}"
+            echo -e "\n${C_GREEN}✅ SUCCESS: DNSTT with EDNS proxy has been installed and started!${C_RESET}"
+            echo -e "${C_CYAN}ℹ️ DNSTT server runs on port 5300 (internal)${C_RESET}"
+            echo -e "${C_CYAN}ℹ️ EDNS proxy listens on port 53 (public) and forwards to port 5300${C_RESET}"
+            echo -e "${C_CYAN}ℹ️ External EDNS size: 512, Internal EDNS size: 1800 (high speed)${C_RESET}"
+            show_dnstt_details
+        else
+            echo -e "\n${C_YELLOW}⚠️ DNSTT server started but EDNS proxy failed.${C_RESET}"
+            journalctl -u dnstt-edns-proxy.service -n 15 --no-pager
+        fi
     else
         echo -e "\n${C_RED}❌ ERROR: DNSTT service failed to start.${C_RESET}"
         journalctl -u dnstt.service -n 15 --no-pager
@@ -1436,35 +1560,25 @@ uninstall_dnstt() {
     fi
     local confirm="y"
     if [[ "$UNINSTALL_MODE" != "silent" ]]; then
-        read -p "👉 Are you sure you want to uninstall DNSTT? This will delete DNS records if they were auto-generated. (y/n): " confirm
+        read -p "👉 Are you sure you want to uninstall DNSTT? (y/n): " confirm
     fi
     if [[ "$confirm" != "y" ]]; then
         echo -e "\n${C_YELLOW}❌ Uninstallation cancelled.${C_RESET}"
         return
     fi
-    echo -e "${C_BLUE}🛑 Stopping and disabling DNSTT service...${C_RESET}"
+    echo -e "${C_BLUE}🛑 Stopping and disabling DNSTT services...${C_RESET}"
+    systemctl stop dnstt-edns-proxy.service > /dev/null 2>&1
+    systemctl disable dnstt-edns-proxy.service > /dev/null 2>&1
     systemctl stop dnstt.service > /dev/null 2>&1
     systemctl disable dnstt.service > /dev/null 2>&1
     if [ -f "$DNSTT_CONFIG_FILE" ]; then
-        source "$DNSTT_CONFIG_FILE"
-        if [[ "$DNSTT_RECORDS_MANAGED" == "true" ]]; then
-            echo -e "${C_BLUE}🗑️ Removing auto-generated DNS records...${C_RESET}"
-            curl -s -X DELETE "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/$TUNNEL_SUBDOMAIN/NS/" \
-                 -H "Authorization: Token $DESEC_TOKEN" > /dev/null
-            curl -s -X DELETE "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/$NS_SUBDOMAIN/A/" \
-                 -H "Authorization: Token $DESEC_TOKEN" > /dev/null
-            if [[ "$HAS_IPV6" == "true" ]]; then
-                curl -s -X DELETE "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/$NS_SUBDOMAIN/AAAA/" \
-                     -H "Authorization: Token $DESEC_TOKEN" > /dev/null
-            fi
-            echo -e "${C_GREEN}✅ DNS records have been removed.${C_RESET}"
-        else
-            echo -e "${C_YELLOW}⚠️ DNS records were manually configured. Please delete them from your DNS provider.${C_RESET}"
-        fi
+        echo -e "${C_YELLOW}⚠️ DNS records were manually configured. Please delete them from your DNS provider.${C_RESET}"
     fi
     echo -e "${C_BLUE}🗑️ Removing service files and binaries...${C_RESET}"
     rm -f "$DNSTT_SERVICE_FILE"
+    rm -f "$DNSTT_EDNS_SERVICE"
     rm -f "$DNSTT_BINARY"
+    rm -f "$DNSTT_EDNS_PROXY"
     rm -rf "$DNSTT_KEYS_DIR"
     rm -f "$DNSTT_CONFIG_FILE"
     systemctl daemon-reload
@@ -2132,11 +2246,6 @@ show_banner() {
     
     local total_users=0
     if [[ -s "$DB_FILE" ]]; then total_users=$(grep -c . "$DB_FILE"); fi
-    
-    local managed_domain="Not Generated"
-    if [ -f "$DNS_INFO_FILE" ]; then
-        managed_domain=$(grep 'FULL_DOMAIN' "$DNS_INFO_FILE" | cut -d'"' -f2)
-    fi
 
     clear
     echo
@@ -2145,7 +2254,7 @@ show_banner() {
     echo -e "${C_DIM}    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~${C_RESET}"
     printf "    ${C_CYAN}%-12s${C_RESET} %-25s ${C_CYAN}%-12s${C_RESET} %s\n" "OS:" "$os_name" "Online:" "$online_users Sessions"
     printf "    ${C_CYAN}%-12s${C_RESET} %-25s ${C_CYAN}%-12s${C_RESET} %s\n" "Uptime:" "$up_time" "Total Users:" "$total_users"
-    printf "    ${C_CYAN}%-12s${C_RESET} %-25s ${C_CYAN}%-12s${C_RESET} %s\n" "Resources:" "CPU(${cpu_cores}): ${cpu_usage}%% | RAM(${ram_total}): ${ram_usage}%%" "Domain:" "$managed_domain"
+    printf "    ${C_CYAN}%-12s${C_RESET} %-25s\n" "Resources:" "CPU(${cpu_cores}): ${cpu_usage}%% | RAM(${ram_total}): ${ram_usage}%%"
     echo -e "${C_DIM}    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~${C_RESET}"
 }
 
@@ -2167,7 +2276,20 @@ protocol_menu() {
             ssl_tunnel_status="${C_STATUS_A}(Active)${C_RESET}"
         fi
         
-        local dnstt_status; if systemctl is-active --quiet dnstt.service; then dnstt_status="${C_STATUS_A}(Active)${C_RESET}"; else dnstt_status="${C_STATUS_I}(Inactive)${C_RESET}"; fi
+        local dnstt_status
+        if [ -f "$DNSTT_SERVICE_FILE" ]; then
+            if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                    dnstt_status="${C_STATUS_A}(Active)${C_RESET}"
+                else
+                    dnstt_status="${C_STATUS_A}(Server Active)${C_RESET}"
+                fi
+            else
+                dnstt_status="${C_STATUS_I}(Inactive)${C_RESET}"
+            fi
+        else
+            dnstt_status="${C_STATUS_I}(Inactive)${C_RESET}"
+        fi
         
         local falconproxy_status="${C_STATUS_I}(Inactive)${C_RESET}"
         local falconproxy_ports=""
@@ -2188,7 +2310,7 @@ protocol_menu() {
         echo -e "     ${C_CHOICE}4)${C_RESET} 🗑️ Uninstall udp-custom"
         echo -e "     ${C_CHOICE}5)${C_RESET} 🔒 Install ${ssl_tunnel_text} ${ssl_tunnel_status}"
         echo -e "     ${C_CHOICE}6)${C_RESET} 🗑️ Uninstall SSL Tunnel"
-        echo -e "     ${C_CHOICE}7)${C_RESET} 📡 Install/View DNSTT (Port 53) $dnstt_status"
+        echo -e "     ${C_CHOICE}7)${C_RESET} 📡 Install/View DNSTT (Port 53/5300) $dnstt_status"
         echo -e "     ${C_CHOICE}8)${C_RESET} 🗑️ Uninstall DNSTT"
         echo -e "     ${C_CHOICE}9)${C_RESET} 🦅 Install Falcon Proxy (Select Version) ${falconproxy_ports} $falconproxy_status"
         echo -e "     ${C_CHOICE}10)${C_RESET} 🗑️ Uninstall Falcon Proxy"
@@ -2352,7 +2474,6 @@ uninstall_script() {
     uninstall_ssl_tunnel
     uninstall_falcon_proxy
     uninstall_zivpn
-    delete_dns_record
     
     echo -e "\n${C_BLUE}🔄 Reloading systemd daemon...${C_RESET}"
     systemctl daemon-reload
@@ -2393,10 +2514,9 @@ main_menu() {
         
         echo
         echo -e "   ${C_TITLE}═══════════════[ ${C_BOLD}⚙️ SYSTEM UTILITIES ${C_RESET}${C_TITLE}]═══════════════${C_RESET}"
-        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s ${C_CHOICE}%2s${C_RESET}) %-25s\n" "🔌 8" "Install Protocols & Panels" "🌐 11" "Manage DNS Domain"
-        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s ${C_CHOICE}%2s${C_RESET}) %-25s\n" "💾 9" "Backup User Data" "🎨 12" "SSH Banner Management"
-        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s ${C_CHOICE}%2s${C_RESET}) %-25s\n" "📥 10" "Restore User Data" "🧹 13" "Cleanup Expired Users"
-        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s\n" "🚀 14" "DT Proxy Management"
+        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s ${C_CHOICE}%2s${C_RESET}) %-25s\n" "🔌 8" "Install Protocols & Panels" "💾 9" "Backup User Data"
+        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s ${C_CHOICE}%2s${C_RESET}) %-25s\n" "📥 10" "Restore User Data" "🎨 11" "SSH Banner Management"
+        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s ${C_CHOICE}%2s${C_RESET}) %-25s\n" "🧹 12" "Cleanup Expired Users" "🚀 13" "DT Proxy Management"
 
         echo
         echo -e "   ${C_DANGER}═══════════════════[ ${C_BOLD}🔥 DANGER ZONE ${C_RESET}${C_DANGER}]═══════════════════${C_RESET}"
@@ -2415,10 +2535,9 @@ main_menu() {
             8) protocol_menu ;;
             9) backup_user_data; press_enter ;;
             10) restore_user_data; press_enter ;;
-            11) dns_menu; press_enter ;;
-            12) ssh_banner_menu ;;
-            13) cleanup_expired; press_enter ;;
-            14) dt_proxy_menu ;;
+            11) ssh_banner_menu ;;
+            12) cleanup_expired; press_enter ;;
+            13) dt_proxy_menu ;;
             15) uninstall_script ;;
             0) echo -e "\n${C_BLUE}👋 Goodbye!${C_RESET}"; exit 0 ;;
             *) invalid_option ;;
