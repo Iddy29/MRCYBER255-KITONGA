@@ -1465,10 +1465,37 @@ install_dnstt() {
     
     # --- FIX: Force release of Port 53 / Disable systemd-resolved ---
     echo -e "${C_GREEN}⚙️ Forcing release of Port 53 (stopping systemd-resolved)...${C_RESET}"
-    systemctl stop systemd-resolved >/dev/null 2>&1
-    systemctl disable systemd-resolved >/dev/null 2>&1
+    
+    # Stop systemd-resolved
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        systemctl stop systemd-resolved 2>/dev/null
+        sleep 1
+    fi
+    
+    # Disable systemd-resolved to prevent restart
+    if systemctl is-enabled --quiet systemd-resolved 2>/dev/null; then
+        systemctl disable systemd-resolved 2>/dev/null
+        sleep 1
+    fi
+    
+    # Mask systemd-resolved to prevent any automatic start
+    systemctl mask systemd-resolved 2>/dev/null
+    
+    # Handle resolv.conf
+    chattr -i /etc/resolv.conf 2>/dev/null
+    if [ -L /etc/resolv.conf ]; then
+        rm -f /etc/resolv.conf
+    fi
     rm -f /etc/resolv.conf
-    echo "nameserver 8.8.8.8" | tee /etc/resolv.conf > /dev/null
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+    chattr +i /etc/resolv.conf 2>/dev/null
+    
+    # Kill any remaining systemd-resolved processes
+    pkill -9 systemd-resolved 2>/dev/null
+    sleep 2
+    
+    echo -e "${C_GREEN}✅ Port 53 preparation completed.${C_RESET}"
     # ----------------------------------------------------------------
     
     echo -e "\n${C_BLUE}🔎 Checking if port 53 (UDP) is available...${C_RESET}"
@@ -1633,6 +1660,8 @@ DNSTT EDNS proxy (smart parser)
 import socket
 import threading
 import struct
+import sys
+import traceback
 
 # Public listen
 LISTEN_HOST = "0.0.0.0"
@@ -1735,48 +1764,96 @@ def handle_request(server_sock: socket.socket, data: bytes, client_addr):
     - receive response, patch EDNS size to EXTERNAL_EDNS_SIZE
     - return to client
     """
-    upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    upstream_sock.settimeout(5.0)
-
+    upstream_sock = None
     try:
+        upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        upstream_sock.settimeout(10.0)
+        
         upstream_data = patch_edns_udp_size(data, INTERNAL_EDNS_SIZE)
         upstream_sock.sendto(upstream_data, (UPSTREAM_HOST, UPSTREAM_PORT))
 
         resp, _ = upstream_sock.recvfrom(4096)
-        resp_patched = patch_edns_udp_size(resp, EXTERNAL_EDNS_SIZE)
-
-        server_sock.sendto(resp_patched, client_addr)
+        if resp:
+            resp_patched = patch_edns_udp_size(resp, EXTERNAL_EDNS_SIZE)
+            server_sock.sendto(resp_patched, client_addr)
     except socket.timeout:
-        # client will resend, no need to crash proxy
+        # Timeout - upstream may be slow, client will resend
         pass
-    except Exception:
-        # stay quiet, don't crash proxy
+    except ConnectionRefusedError:
+        # Upstream not ready - try again on next request
         pass
+    except OSError as e:
+        # Network error - log but don't crash
+        if e.errno != 101:  # Network unreachable is ok to ignore
+            print(f"[DNSTT EDNS proxy] Warning: OSError in handle_request: {e}", file=sys.stderr)
+    except Exception as e:
+        # Unexpected error - log but don't crash
+        print(f"[DNSTT EDNS proxy] Warning: Unexpected error in handle_request: {e}", file=sys.stderr)
     finally:
-        upstream_sock.close()
+        if upstream_sock:
+            try:
+                upstream_sock.close()
+            except:
+                pass
 
 
 def main():
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    server_sock.bind((LISTEN_HOST, LISTEN_PORT))
-    print(f"[DNSTT EDNS proxy] Listening on {LISTEN_HOST}:{LISTEN_PORT}, "
-          f"upstream {UPSTREAM_HOST}:{UPSTREAM_PORT}, "
-          f"external EDNS={EXTERNAL_EDNS_SIZE}, internal EDNS={INTERNAL_EDNS_SIZE}")
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    
+    try:
+        server_sock.bind((LISTEN_HOST, LISTEN_PORT))
+        print(f"[DNSTT EDNS proxy] Successfully bound to {LISTEN_HOST}:{LISTEN_PORT}")
+        print(f"[DNSTT EDNS proxy] Upstream: {UPSTREAM_HOST}:{UPSTREAM_PORT}")
+        print(f"[DNSTT EDNS proxy] External EDNS={EXTERNAL_EDNS_SIZE}, Internal EDNS={INTERNAL_EDNS_SIZE}")
+    except PermissionError:
+        print(f"[DNSTT EDNS proxy] ERROR: Permission denied binding to port {LISTEN_PORT}")
+        print(f"[DNSTT EDNS proxy] ERROR: Service needs CAP_NET_BIND_SERVICE capability or root privileges")
+        sys.exit(1)
+    except OSError as e:
+        print(f"[DNSTT EDNS proxy] ERROR: Failed to bind to {LISTEN_HOST}:{LISTEN_PORT}: {e}")
+        print(f"[DNSTT EDNS proxy] ERROR: Port {LISTEN_PORT} may be in use or already bound")
+        sys.exit(1)
+    except Exception as e:
+        print(f"[DNSTT EDNS proxy] ERROR: Unexpected error: {e}")
+        sys.exit(1)
 
     while True:
-        data, client_addr = server_sock.recvfrom(4096)
-        t = threading.Thread(
-            target=handle_request,
-            args=(server_sock, data, client_addr),
-            daemon=True,
-        )
-        t.start()
+        try:
+            data, client_addr = server_sock.recvfrom(4096)
+            t = threading.Thread(
+                target=handle_request,
+                args=(server_sock, data, client_addr),
+                daemon=True,
+            )
+            t.start()
+        except KeyboardInterrupt:
+            print(f"\n[DNSTT EDNS proxy] Shutting down...")
+            break
+        except Exception as e:
+            print(f"[DNSTT EDNS proxy] ERROR in main loop: {e}")
+            continue
 
 
 if __name__ == "__main__":
     main()
 EDNSPROXY
+    
+    # Verify Python script was created correctly
+    if [ ! -f "$DNSTT_EDNS_PROXY" ]; then
+        echo -e "${C_RED}❌ Failed to create EDNS proxy script.${C_RESET}"
+        return 1
+    fi
+    
+    # Set executable permissions
     chmod +x "$DNSTT_EDNS_PROXY"
+    
+    # Verify Python script syntax
+    if ! python3 -m py_compile "$DNSTT_EDNS_PROXY" 2>/dev/null; then
+        echo -e "${C_YELLOW}⚠️ Warning: Python script syntax check failed. Proceeding anyway...${C_RESET}"
+    else
+        echo -e "${C_GREEN}✅ EDNS proxy script created and validated successfully.${C_RESET}"
+    fi
     
     echo -e "\n${C_BLUE}📝 Creating DNSTT systemd service (port 5300)...${C_RESET}"
     cat > "$DNSTT_SERVICE_FILE" <<-EOF
@@ -1790,6 +1867,10 @@ Type=simple
 ExecStart=$DNSTT_BINARY -udp :5300$mtu_string -privkey-file "$DNSTT_KEYS_DIR/server.key" "$TUNNEL_DOMAIN" "$FORWARD_TARGET"
 Restart=always
 RestartSec=3
+RestartPreventExitStatus=0
+StandardOutput=journal
+StandardError=journal
+User=root
 
 [Install]
 WantedBy=multi-user.target
@@ -1808,6 +1889,13 @@ Type=simple
 ExecStart=/usr/bin/python3 "$DNSTT_EDNS_PROXY"
 Restart=always
 RestartSec=3
+RestartPreventExitStatus=0
+StandardOutput=journal
+StandardError=journal
+User=root
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
+NoNewPrivileges=false
 
 [Install]
 WantedBy=multi-user.target
@@ -1834,42 +1922,102 @@ EOF
         return 1
     fi
     
+    # Start DNSTT service
     if ! systemctl start dnstt.service; then
         echo -e "${C_RED}❌ Failed to start DNSTT service.${C_RESET}"
-        journalctl -u dnstt.service -n 15 --no-pager
+        journalctl -u dnstt.service -n 20 --no-pager
         return 1
     fi
     
-    sleep 2
+    sleep 3
     
+    # Validate DNSTT service is running and port 5300 is listening
+    local dnstt_started=false
     if systemctl is-active --quiet dnstt.service; then
-        echo -e "${C_GREEN}✅ DNSTT server (port 5300) started successfully.${C_RESET}"
-        
+        if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+            echo -e "${C_GREEN}✅ DNSTT server (port 5300) started successfully and is listening.${C_RESET}"
+            dnstt_started=true
+        else
+            echo -e "${C_YELLOW}⚠️ DNSTT service is active but port 5300 is not listening. Checking logs...${C_RESET}"
+            journalctl -u dnstt.service -n 20 --no-pager
+            sleep 2
+            # Retry check
+            if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+                echo -e "${C_GREEN}✅ Port 5300 is now listening.${C_RESET}"
+                dnstt_started=true
+            fi
+        fi
+    else
+        echo -e "${C_RED}❌ DNSTT service is not active.${C_RESET}"
+        journalctl -u dnstt.service -n 20 --no-pager
+        return 1
+    fi
+    
+    if [[ "$dnstt_started" == "true" ]]; then
+        # Start EDNS proxy service
         if ! systemctl enable dnstt-edns-proxy.service; then
             echo -e "${C_YELLOW}⚠️ Failed to enable EDNS proxy service.${C_RESET}"
         fi
         
-        if ! systemctl start dnstt-edns-proxy.service; then
-            echo -e "${C_YELLOW}⚠️ Failed to start EDNS proxy service.${C_RESET}"
-            journalctl -u dnstt-edns-proxy.service -n 15 --no-pager
+        # Ensure port 53 is still free
+        if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s' && ! ss -lunp 2>/dev/null | grep -qE 'python3.*:53\s'; then
+            echo -e "${C_YELLOW}⚠️ Port 53 is still in use. Attempting to free it...${C_RESET}"
+            pkill -9 systemd-resolved 2>/dev/null
+            sleep 2
         fi
         
-        sleep 2
+        if ! systemctl start dnstt-edns-proxy.service; then
+            echo -e "${C_YELLOW}⚠️ Failed to start EDNS proxy service.${C_RESET}"
+            journalctl -u dnstt-edns-proxy.service -n 20 --no-pager
+            echo -e "${C_YELLOW}💡 Trying to diagnose the issue...${C_RESET}"
+            if [ ! -f "$DNSTT_EDNS_PROXY" ]; then
+                echo -e "${C_RED}❌ EDNS proxy script not found at: $DNSTT_EDNS_PROXY${C_RESET}"
+            elif [ ! -x "$DNSTT_EDNS_PROXY" ]; then
+                echo -e "${C_YELLOW}⚠️ EDNS proxy script is not executable. Fixing...${C_RESET}"
+                chmod +x "$DNSTT_EDNS_PROXY"
+                systemctl restart dnstt-edns-proxy.service
+                sleep 2
+            fi
+        fi
         
+        sleep 3
+        
+        # Validate EDNS proxy is running and port 53 is listening
+        local edns_started=false
         if systemctl is-active --quiet dnstt-edns-proxy.service; then
-            echo -e "${C_GREEN}✅ EDNS proxy (port 53) started successfully.${C_RESET}"
+            if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s' && ss -lunp 2>/dev/null | grep -qE 'python3.*:53\s'; then
+                echo -e "${C_GREEN}✅ EDNS proxy (port 53) started successfully and is listening.${C_RESET}"
+                edns_started=true
+            else
+                echo -e "${C_YELLOW}⚠️ EDNS proxy service is active but port 53 may not be listening properly.${C_RESET}"
+                journalctl -u dnstt-edns-proxy.service -n 20 --no-pager
+                sleep 2
+                # Retry check
+                if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+                    echo -e "${C_GREEN}✅ Port 53 is now listening.${C_RESET}"
+                    edns_started=true
+                fi
+            fi
+        else
+            echo -e "${C_YELLOW}⚠️ EDNS proxy service is not active.${C_RESET}"
+            journalctl -u dnstt-edns-proxy.service -n 20 --no-pager
+        fi
+        
+        if [[ "$dnstt_started" == "true" ]] && [[ "$edns_started" == "true" ]]; then
             echo -e "\n${C_GREEN}✅ SUCCESS: DNSTT with EDNS proxy has been installed and started!${C_RESET}"
             echo -e "${C_CYAN}ℹ️ DNSTT server runs on port 5300 (internal)${C_RESET}"
             echo -e "${C_CYAN}ℹ️ EDNS proxy listens on port 53 (public) and forwards to port 5300${C_RESET}"
             echo -e "${C_CYAN}ℹ️ External EDNS size: 512, Internal EDNS size: 1800 (high speed)${C_RESET}"
             show_dnstt_details
-        else
-            echo -e "\n${C_YELLOW}⚠️ DNSTT server started but EDNS proxy failed.${C_RESET}"
-            journalctl -u dnstt-edns-proxy.service -n 15 --no-pager
+        elif [[ "$dnstt_started" == "true" ]]; then
+            echo -e "\n${C_YELLOW}⚠️ DNSTT server is running, but EDNS proxy may need attention.${C_RESET}"
+            echo -e "${C_YELLOW}💡 Check logs: journalctl -u dnstt-edns-proxy.service -f${C_RESET}"
+            show_dnstt_details
         fi
     else
-        echo -e "\n${C_RED}❌ ERROR: DNSTT service failed to start.${C_RESET}"
-        journalctl -u dnstt.service -n 15 --no-pager
+        echo -e "\n${C_RED}❌ ERROR: DNSTT service failed to start properly.${C_RESET}"
+        journalctl -u dnstt.service -n 20 --no-pager
+        return 1
     fi
 }
 
@@ -1888,13 +2036,39 @@ uninstall_dnstt() {
         return
     fi
     echo -e "${C_BLUE}🛑 Stopping and disabling DNSTT services...${C_RESET}"
-    systemctl stop dnstt-edns-proxy.service > /dev/null 2>&1
-    systemctl disable dnstt-edns-proxy.service > /dev/null 2>&1
-    systemctl stop dnstt.service > /dev/null 2>&1
-    systemctl disable dnstt.service > /dev/null 2>&1
+    
+    # Stop EDNS proxy service
+    if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+        systemctl stop dnstt-edns-proxy.service
+        sleep 1
+    fi
+    systemctl disable dnstt-edns-proxy.service >/dev/null 2>&1
+    
+    # Stop DNSTT service
+    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+        systemctl stop dnstt.service
+        sleep 1
+    fi
+    systemctl disable dnstt.service >/dev/null 2>&1
+    
+    # Kill any remaining processes
+    pkill -9 dnstt-server 2>/dev/null
+    pkill -9 -f "dnstt-edns-proxy.py" 2>/dev/null
+    sleep 1
+    
+    # Verify services are stopped
+    if systemctl is-active --quiet dnstt.service 2>/dev/null || systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+        echo -e "${C_YELLOW}⚠️ Some services may still be running. Force stopping...${C_RESET}"
+        systemctl stop dnstt.service dnstt-edns-proxy.service 2>/dev/null
+        pkill -9 dnstt-server 2>/dev/null
+        pkill -9 -f "dnstt-edns-proxy.py" 2>/dev/null
+        sleep 2
+    fi
+    
     if [ -f "$DNSTT_CONFIG_FILE" ]; then
         echo -e "${C_YELLOW}⚠️ DNS records were manually configured. Please delete them from your DNS provider.${C_RESET}"
     fi
+    
     echo -e "${C_BLUE}🗑️ Removing service files and binaries...${C_RESET}"
     rm -f "$DNSTT_SERVICE_FILE"
     rm -f "$DNSTT_EDNS_SERVICE"
@@ -1902,7 +2076,24 @@ uninstall_dnstt() {
     rm -f "$DNSTT_EDNS_PROXY"
     rm -rf "$DNSTT_KEYS_DIR"
     rm -f "$DNSTT_CONFIG_FILE"
+    
     systemctl daemon-reload
+    
+    # Optional: Unmask systemd-resolved if user wants
+    if systemctl is-masked systemd-resolved 2>/dev/null | grep -q masked; then
+        echo -e "${C_YELLOW}ℹ️ systemd-resolved is currently masked.${C_RESET}"
+        read -p "👉 Do you want to unmask and restore systemd-resolved? (y/n): " restore_resolved
+        if [[ "$restore_resolved" == "y" || "$restore_resolved" == "Y" ]]; then
+            systemctl unmask systemd-resolved 2>/dev/null
+            chattr -i /etc/resolv.conf 2>/dev/null
+            rm -f /etc/resolv.conf
+            systemctl enable systemd-resolved 2>/dev/null
+            systemctl start systemd-resolved 2>/dev/null
+            echo -e "${C_GREEN}✅ systemd-resolved has been restored.${C_RESET}"
+        fi
+    fi
+    
+    echo -e "${C_GREEN}✅ DNSTT has been uninstalled successfully.${C_RESET}"
     
     echo -e "${C_YELLOW}ℹ️ Making /etc/resolv.conf writable again...${C_RESET}"
     chattr -i /etc/resolv.conf &>/dev/null
