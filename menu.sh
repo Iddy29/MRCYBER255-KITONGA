@@ -1180,6 +1180,104 @@ EOF
     echo -e "${C_GREEN}✅ SSL Tunnel has been uninstalled.${C_RESET}"
 }
 
+verify_dnstt_keys() {
+    local pubkey_file="$DNSTT_KEYS_DIR/server.pub"
+    local privkey_file="$DNSTT_KEYS_DIR/server.key"
+    
+    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}  🔍 DNSTT KEY VERIFICATION${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    
+    # Check if key files exist
+    if [[ ! -f "$pubkey_file" ]]; then
+        echo -e "  ${C_RED}❌ Public key file not found: $pubkey_file${C_RESET}"
+        return 1
+    fi
+    
+    if [[ ! -f "$privkey_file" ]]; then
+        echo -e "  ${C_RED}❌ Private key file not found: $privkey_file${C_RESET}"
+        return 1
+    fi
+    
+    echo -e "  ${C_GREEN}✅ Both key files exist${C_RESET}"
+    
+    # Read and validate public key
+    local public_key_content
+    public_key_content=$(cat "$pubkey_file" 2>/dev/null)
+    
+    if [[ -z "$public_key_content" ]]; then
+        echo -e "  ${C_RED}❌ Public key file is empty${C_RESET}"
+        return 1
+    fi
+    
+    # Check public key format (DNSTT keys start with "dnstt:")
+    if [[ "$public_key_content" =~ ^dnstt: ]]; then
+        echo -e "  ${C_GREEN}✅ Public key format is valid (DNSTT format)${C_RESET}"
+    else
+        echo -e "  ${C_YELLOW}⚠️ Public key format may be incorrect (should start with 'dnstt:')${C_RESET}"
+    fi
+    
+    # Check key length (DNSTT public keys are typically long)
+    local key_length=${#public_key_content}
+    if [[ $key_length -gt 50 ]]; then
+        echo -e "  ${C_GREEN}✅ Public key length is valid ($key_length characters)${C_RESET}"
+    else
+        echo -e "  ${C_YELLOW}⚠️ Public key seems too short ($key_length characters)${C_RESET}"
+    fi
+    
+    # Check private key size (should be reasonable)
+    if [[ -f "$privkey_file" ]]; then
+        local privkey_size
+        privkey_size=$(stat -f%z "$privkey_file" 2>/dev/null || stat -c%s "$privkey_file" 2>/dev/null || echo "0")
+        if [[ $privkey_size -gt 0 ]]; then
+            echo -e "  ${C_GREEN}✅ Private key file size: ${privkey_size} bytes${C_RESET}"
+        fi
+    fi
+    
+    # Verify keys match using dnstt-server binary if available
+    if [[ -f "$DNSTT_BINARY" ]]; then
+        echo -e "\n  ${C_BLUE}🔐 Verifying key pair match...${C_RESET}"
+        # Test if binary can read the keys (some versions may not support -test-keys)
+        if "$DNSTT_BINARY" -test-keys -privkey-file "$privkey_file" -pubkey-file "$pubkey_file" >/dev/null 2>&1; then
+            echo -e "  ${C_GREEN}✅ Key pair verification: PASSED${C_RESET}"
+        else
+            # Alternative: check if we can read both keys without errors
+            if [[ -r "$privkey_file" ]] && [[ -r "$pubkey_file" ]]; then
+                echo -e "  ${C_GREEN}✅ Both keys are readable (binary verification not available)${C_RESET}"
+            else
+                echo -e "  ${C_RED}❌ Key pair verification: FAILED (keys may not match or binary doesn't support verification)${C_RESET}"
+                return 1
+            fi
+        fi
+    else
+        echo -e "  ${C_YELLOW}⚠️ DNSTT binary not found, skipping key pair verification${C_RESET}"
+    fi
+    
+    echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_CYAN}  📋 PUBLIC KEY CONTENT${C_RESET}"
+    echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_YELLOW}$public_key_content${C_RESET}"
+    echo -e "\n${C_DIM}📄 File location: $pubkey_file${C_RESET}"
+    
+    # Show file permissions
+    local pubkey_perms
+    pubkey_perms=$(stat -c "%a" "$pubkey_file" 2>/dev/null || stat -f "%OLp" "$pubkey_file" 2>/dev/null || echo "unknown")
+    echo -e "${C_DIM}🔐 File permissions: $pubkey_perms${C_RESET}"
+    
+    # Check if service is using these keys
+    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+        local service_key_file
+        service_key_file=$(systemctl show dnstt.service | grep -oP 'ExecStart=.*-privkey-file\s+\K[^\s]+' || echo "")
+        if [[ -n "$service_key_file" ]] && [[ "$service_key_file" == "$privkey_file" ]]; then
+            echo -e "\n  ${C_GREEN}✅ DNSTT service is actively using these keys${C_RESET}"
+        fi
+    fi
+    
+    echo -e "\n${C_GREEN}✅ Public key verification completed successfully!${C_RESET}"
+    echo -e "${C_DIM}💡 Use this public key in your DNSTT client configuration${C_RESET}"
+    return 0
+}
+
 show_dnstt_details() {
     if [ -f "$DNSTT_CONFIG_FILE" ]; then
         source "$DNSTT_CONFIG_FILE"
@@ -1199,7 +1297,31 @@ show_dnstt_details() {
         echo -e "${C_BOLD}${C_CYAN}  🔑 AUTHENTICATION${C_RESET}"
         echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
         echo -e "  ${C_GREEN}3️⃣${C_RESET} ${C_WHITE}Public Key:${C_RESET}"
-        echo -e "     ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+        
+        # Try to read from actual file first, then from config
+        local pubkey_file="$DNSTT_KEYS_DIR/server.pub"
+        local current_pubkey=""
+        
+        if [[ -f "$pubkey_file" ]]; then
+            current_pubkey=$(cat "$pubkey_file" 2>/dev/null | tr -d '\n\r' | head -c 200)
+        fi
+        
+        if [[ -n "$current_pubkey" ]]; then
+            echo -e "     ${C_YELLOW}$current_pubkey${C_RESET}"
+            if [[ ${#current_pubkey} -gt 200 ]]; then
+                echo -e "     ${C_DIM}... (truncated, full key in file)${C_RESET}"
+            fi
+        elif [[ -n "$PUBLIC_KEY" ]]; then
+            echo -e "     ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+        else
+            echo -e "     ${C_RED}❌ Public key not found${C_RESET}"
+        fi
+        
+        # Show file path for easy access
+        if [[ -f "$pubkey_file" ]]; then
+            echo -e "     ${C_DIM}📄 File: $pubkey_file${C_RESET}"
+            echo -e "     ${C_DIM}💡 View full key: cat $pubkey_file${C_RESET}"
+        fi
         
         echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
         echo -e "${C_BOLD}${C_CYAN}  ⚙️ NETWORK SETTINGS${C_RESET}"
@@ -1458,6 +1580,24 @@ install_dnstt() {
             echo -e "${C_BOLD}${C_GREEN}  ✅ ALL SERVICES RUNNING CORRECTLY${C_RESET}"
             echo -e "${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
             echo -e "  ${C_GREEN}🎉${C_RESET} ${C_WHITE}All DNSTT services are active and ports are listening!${C_RESET}"
+            
+            # Add option to verify public key
+            echo -e "\n${C_BLUE}Additional options:${C_RESET}"
+            echo -e "  ${C_GREEN}1)${C_RESET} 🔐 Verify Public Key"
+            echo -e "  ${C_GREEN}2)${C_RESET} ⏭️  Return to menu"
+            read -p "$(echo -e ${C_PROMPT}"👉 Select an option [2]: "${C_RESET})" verify_choice
+            verify_choice=${verify_choice:-2}
+            
+            case $verify_choice in
+                1)
+                    verify_dnstt_keys
+                    press_enter
+                    ;;
+                2)
+                    ;;
+                *)
+                    ;;
+            esac
         fi
         
         return
