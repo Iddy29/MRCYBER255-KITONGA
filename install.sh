@@ -18,6 +18,20 @@ echo "Installing ${REPO_NAME} Manager..."
 MENU_URL="${REPO_BASE_URL}/menu.sh"
 MENU_PATH="/usr/local/bin/menu"
 
+# Validate URL construction
+if [[ ! "$REPO_BASE_URL" =~ ^https://raw\.githubusercontent\.com/ ]]; then
+    echo "Error: Invalid URL constructed: $REPO_BASE_URL"
+    echo "Please check REPO_OWNER, REPO_NAME, and REPO_BRANCH_NAME variables."
+    exit 1
+fi
+
+# Verify URL contains no typos
+if [[ "$REPO_BASE_URL" == *"githubuserecontent"* ]] || [[ "$REPO_BASE_URL" == *"githubusercontent"* && "$REPO_BASE_URL" != *"raw.githubusercontent.com"* ]]; then
+    echo "Error: URL contains typo: $REPO_BASE_URL"
+    echo "Correct URL should be: https://raw.githubusercontent.com/..."
+    exit 1
+fi
+
 # Check if wget or curl is available
 if command -v wget &> /dev/null; then
     DOWNLOAD_CMD="wget"
@@ -36,8 +50,44 @@ else
 fi
 
 echo "Downloading menu.sh from repository..."
-echo "URL: $MENU_URL"
+echo "Full URL: $MENU_URL"
+echo "Base URL: $REPO_BASE_URL"
+echo "Repository: ${REPO_OWNER}/${REPO_NAME}"
+echo "Branch: ${REPO_BRANCH_NAME}"
 echo "Note: Using IPv4 only to avoid connection issues..."
+echo ""
+
+# Verify URL is properly formatted and contains no typos
+if [[ ! "$MENU_URL" =~ ^https://raw\.githubusercontent\.com/[^/]+/[^/]+/[^/]+/menu\.sh$ ]]; then
+    echo "Error: Invalid menu.sh URL format: $MENU_URL"
+    echo "Expected format: https://raw.githubusercontent.com/OWNER/REPO/BRANCH/menu.sh"
+    exit 1
+fi
+
+# Check for common typos in URL
+if [[ "$MENU_URL" == *"githubuserecontent"* ]] || [[ "$MENU_URL" == *"githubcontent"* ]] || [[ "$MENU_URL" != *"raw.githubusercontent.com"* ]]; then
+    echo "Error: URL contains typo or incorrect domain!"
+    echo "Found URL: $MENU_URL"
+    echo "Correct domain should be: raw.githubusercontent.com"
+    echo "Please check your network/DNS configuration or repository settings."
+    exit 1
+fi
+
+# Test URL reachability before attempting download
+echo "Testing URL reachability..."
+if command -v curl &> /dev/null; then
+    if ! curl -4 -I -s --max-time 10 "$MENU_URL" | grep -q "HTTP/.*200\|HTTP/.*302"; then
+        echo "Warning: URL may not be reachable. Continuing anyway..."
+    else
+        echo "URL is reachable. Proceeding with download..."
+    fi
+elif command -v wget &> /dev/null; then
+    if ! wget --spider --prefer-family=IPv4 -T 10 "$MENU_URL" 2>&1 | grep -q "200 OK\|302 Found"; then
+        echo "Warning: URL may not be reachable. Continuing anyway..."
+    else
+        echo "URL is reachable. Proceeding with download..."
+    fi
+fi
 echo ""
 
 # Download menu.sh with progress and retries
@@ -53,13 +103,28 @@ while [[ $DOWNLOAD_ATTEMPTS -lt $MAX_ATTEMPTS ]]; do
         sleep 2
     fi
     
-    if $DOWNLOAD_CMD "${DOWNLOAD_FLAGS[@]}" "$MENU_PATH" "$MENU_URL" 2>&1; then
-        DOWNLOAD_SUCCESS=true
-        break
-    else
-        echo "Download attempt $DOWNLOAD_ATTEMPTS failed."
-        if [[ -f "$MENU_PATH" ]]; then
-            rm -f "$MENU_PATH"
+    # Construct the download command properly based on tool
+    if [[ "$DOWNLOAD_CMD" == "wget" ]]; then
+        # wget format: wget [flags] -O output_file url
+        if wget "${DOWNLOAD_FLAGS[@]}" "$MENU_PATH" "$MENU_URL" 2>&1; then
+            DOWNLOAD_SUCCESS=true
+            break
+        else
+            echo "Download attempt $DOWNLOAD_ATTEMPTS failed."
+            if [[ -f "$MENU_PATH" ]]; then
+                rm -f "$MENU_PATH"
+            fi
+        fi
+    elif [[ "$DOWNLOAD_CMD" == "curl" ]]; then
+        # curl format: curl [flags] -o output_file url
+        if curl "${DOWNLOAD_FLAGS[@]}" "$MENU_PATH" "$MENU_URL" 2>&1; then
+            DOWNLOAD_SUCCESS=true
+            break
+        else
+            echo "Download attempt $DOWNLOAD_ATTEMPTS failed."
+            if [[ -f "$MENU_PATH" ]]; then
+                rm -f "$MENU_PATH"
+            fi
         fi
     fi
 done
@@ -124,20 +189,31 @@ if [[ "$DOWNLOAD_SUCCESS" == "true" ]]; then
 else
     echo ""
     echo "❌ Error: Failed to download menu.sh from repository after $MAX_ATTEMPTS attempts."
-    echo "URL: $MENU_URL"
+    echo ""
+    echo "Configuration used:"
+    echo "  Repository Owner: $REPO_OWNER"
+    echo "  Repository Name: $REPO_NAME"
+    echo "  Branch: $REPO_BRANCH_NAME"
+    echo "  Base URL: $REPO_BASE_URL"
+    echo "  Full URL: $MENU_URL"
     echo ""
     echo "Possible issues:"
     echo "  - Internet connection problem"
     echo "  - GitHub is blocked or unreachable from your VPS"
+    echo "  - DNS resolution failure (raw.githubusercontent.com)"
     echo "  - IPv6 connectivity issues (script tried IPv4 only)"
     echo "  - Firewall blocking GitHub"
+    echo "  - URL typo or incorrect repository/branch name"
     echo ""
     echo "Troubleshooting steps:"
-    echo "  1. Test connectivity: ping -4 raw.githubusercontent.com"
-    echo "  2. Test with curl: curl -4 -I https://raw.githubusercontent.com"
-    echo "  3. Check firewall rules"
-    echo "  4. Try manual download:"
-    echo "     wget --prefer-family=IPv4 -O /usr/local/bin/menu \"${REPO_BASE_URL}/menu.sh\""
+    echo "  1. Test DNS resolution: nslookup raw.githubusercontent.com"
+    echo "  2. Test connectivity: ping -4 raw.githubusercontent.com"
+    echo "  3. Test with curl: curl -4 -I https://raw.githubusercontent.com"
+    echo "  4. Test specific URL: curl -4 -I \"$MENU_URL\""
+    echo "  5. Check firewall rules"
+    echo "  6. Verify repository exists: https://github.com/${REPO_OWNER}/${REPO_NAME}"
+    echo "  7. Try manual download:"
+    echo "     wget --prefer-family=IPv4 -O /usr/local/bin/menu \"$MENU_URL\""
     echo "     chmod +x /usr/local/bin/menu"
     echo "     /usr/local/bin/menu --install-setup"
     echo ""
