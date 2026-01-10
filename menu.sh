@@ -13,6 +13,11 @@ REPO_OWNER="Iddy29"
 REPO_BRANCH="refs/heads/main"
 REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}"
 
+# Base Directory Configuration (derived from repository name)
+# This is the main directory where all configuration files are stored
+APP_BASE_DIR_NAME=$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')  # Converts MRCYBER255-KITONGA to mrcyber255-kitonga
+APP_BASE_DIR="/etc/${APP_BASE_DIR_NAME}"
+
 # DNS Configuration (used for DNSTT and system DNS)
 # You can change these to your preferred DNS servers
 DNS_PRIMARY="8.8.8.8"      # Google DNS
@@ -34,7 +39,7 @@ DEFAULT_DNSTT_MTU="1800"
 DEFAULT_V2RAY_PORT="8787"
 
 # Default Backup Location
-DEFAULT_BACKUP_PATH="/root/firewallfalcon_users.tar.gz"
+DEFAULT_BACKUP_PATH="/root/${APP_BASE_DIR_NAME}_users.tar.gz"
 
 # Timeout Settings (in seconds)
 CERTBOT_TIMEOUT="120"      # Certbot SSL certificate request timeout
@@ -69,18 +74,18 @@ C_STATUS_A=$C_GREEN
 C_STATUS_I=$C_DIM
 C_ACCENT=$C_CYAN
 
-DB_DIR="/etc/firewallfalcon"
+DB_DIR="$APP_BASE_DIR"
 DB_FILE="$DB_DIR/users.db"
 INSTALL_FLAG_FILE="$DB_DIR/.install"
 BADVPN_SERVICE_FILE="/etc/systemd/system/badvpn.service"
 BADVPN_BUILD_DIR="/root/badvpn-build"
 HAPROXY_CONFIG="/etc/haproxy/haproxy.cfg"
 NGINX_CONFIG_FILE="/etc/nginx/sites-available/default"
-SSL_CERT_DIR="/etc/firewallfalcon/ssl"
-SSL_CERT_FILE="$SSL_CERT_DIR/firewallfalcon.pem"
+SSL_CERT_DIR="$APP_BASE_DIR/ssl"
+SSL_CERT_FILE="$SSL_CERT_DIR/${APP_BASE_DIR_NAME}.pem"
 DNSTT_SERVICE_FILE="/etc/systemd/system/dnstt.service"
 DNSTT_BINARY="/usr/local/bin/dnstt-server"
-DNSTT_KEYS_DIR="/etc/firewallfalcon/dnstt"
+DNSTT_KEYS_DIR="$APP_BASE_DIR/dnstt"
 DNSTT_CONFIG_FILE="$DB_DIR/dnstt_info.conf"
 DNSTT_EDNS_PROXY="/usr/local/bin/dnstt-edns-proxy.py"
 DNSTT_EDNS_SERVICE="/etc/systemd/system/dnstt-edns-proxy.service"
@@ -90,8 +95,8 @@ SSH_BANNER_FILE="/etc/bannerssh"
 FALCONPROXY_SERVICE_FILE="/etc/systemd/system/falconproxy.service"
 FALCONPROXY_BINARY="/usr/local/bin/falconproxy"
 FALCONPROXY_CONFIG_FILE="$DB_DIR/falconproxy_config.conf"
-LIMITER_SCRIPT="/usr/local/bin/firewallfalcon-limiter.sh"
-LIMITER_SERVICE="/etc/systemd/system/firewallfalcon-limiter.service"
+LIMITER_SCRIPT="/usr/local/bin/${APP_BASE_DIR_NAME}-limiter.sh"
+LIMITER_SERVICE="/etc/systemd/system/${APP_BASE_DIR_NAME}-limiter.service"
 
 # --- ZiVPN Variables ---
 ZIVPN_DIR="/etc/zivpn"
@@ -316,7 +321,7 @@ setup_limiter_service() {
     # Updated logic: No logging, smart configurable lockout
     cat > "$LIMITER_SCRIPT" << EOF
 #!/bin/bash
-DB_FILE="/etc/firewallfalcon/users.db"
+DB_FILE="$DB_DIR/users.db"
 LIMITER_CHECK_INTERVAL="$LIMITER_CHECK_INTERVAL"
 LIMITER_LOCK_DURATION="$LIMITER_LOCK_DURATION"
 
@@ -376,7 +381,7 @@ EOF
 
     cat > "$LIMITER_SERVICE" << EOF
 [Unit]
-Description=FirewallFalcon Active User Limiter
+Description=${APP_BASE_DIR_NAME^} Active User Limiter
 After=network.target
 
 [Service]
@@ -389,13 +394,13 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    if ! systemctl is-active --quiet firewallfalcon-limiter 2>/dev/null; then
+    if ! systemctl is-active --quiet ${APP_BASE_DIR_NAME}-limiter 2>/dev/null; then
         systemctl daemon-reload 2>/dev/null || true
-        systemctl enable firewallfalcon-limiter &>/dev/null || true
-        systemctl start firewallfalcon-limiter &>/dev/null || true
+        systemctl enable ${APP_BASE_DIR_NAME}-limiter &>/dev/null || true
+        systemctl start ${APP_BASE_DIR_NAME}-limiter &>/dev/null || true
     else
         # Restart if already running to apply new logic
-        systemctl restart firewallfalcon-limiter &>/dev/null || true
+        systemctl restart ${APP_BASE_DIR_NAME}-limiter &>/dev/null || true
     fi
 }
 
@@ -799,7 +804,7 @@ restore_user_data() {
         rm -rf "$temp_dir"
         return
     fi
-    local restored_db_file="$temp_dir/firewallfalcon/users.db"
+    local restored_db_file="$temp_dir/${APP_BASE_DIR_NAME}/users.db"
     if [ ! -f "$restored_db_file" ]; then
         echo -e "\n${C_RED}❌ ERROR: users.db not found in the backup. Cannot restore user accounts.${C_RESET}"
         rm -rf "$temp_dir"
@@ -808,20 +813,20 @@ restore_user_data() {
     echo -e "${C_BLUE}⚙️ Overwriting current user database...${C_RESET}"
     mkdir -p "$DB_DIR"
     cp "$restored_db_file" "$DB_FILE"
-    if [ -d "$temp_dir/firewallfalcon/ssl" ]; then
-        cp -r "$temp_dir/firewallfalcon/ssl" "$DB_DIR/"
+    if [ -d "$temp_dir/${APP_BASE_DIR_NAME}/ssl" ]; then
+        cp -r "$temp_dir/${APP_BASE_DIR_NAME}/ssl" "$DB_DIR/"
     fi
-    if [ -d "$temp_dir/firewallfalcon/dnstt" ]; then
-        cp -r "$temp_dir/firewallfalcon/dnstt" "$DB_DIR/"
+    if [ -d "$temp_dir/${APP_BASE_DIR_NAME}/dnstt" ]; then
+        cp -r "$temp_dir/${APP_BASE_DIR_NAME}/dnstt" "$DB_DIR/"
     fi
-    if [ -f "$temp_dir/firewallfalcon/dns_info.conf" ]; then
-        cp "$temp_dir/firewallfalcon/dns_info.conf" "$DB_DIR/"
+    if [ -f "$temp_dir/${APP_BASE_DIR_NAME}/dns_info.conf" ]; then
+        cp "$temp_dir/${APP_BASE_DIR_NAME}/dns_info.conf" "$DB_DIR/"
     fi
-    if [ -f "$temp_dir/firewallfalcon/dnstt_info.conf" ]; then
-        cp "$temp_dir/firewallfalcon/dnstt_info.conf" "$DB_DIR/"
+    if [ -f "$temp_dir/${APP_BASE_DIR_NAME}/dnstt_info.conf" ]; then
+        cp "$temp_dir/${APP_BASE_DIR_NAME}/dnstt_info.conf" "$DB_DIR/"
     fi
-    if [ -f "$temp_dir/firewallfalcon/falconproxy_config.conf" ]; then
-        cp "$temp_dir/firewallfalcon/falconproxy_config.conf" "$DB_DIR/"
+    if [ -f "$temp_dir/${APP_BASE_DIR_NAME}/falconproxy_config.conf" ]; then
+        cp "$temp_dir/${APP_BASE_DIR_NAME}/falconproxy_config.conf" "$DB_DIR/"
     fi
     
     echo -e "${C_BLUE}⚙️ Re-synchronizing system accounts with the restored database...${C_RESET}"
@@ -846,7 +851,7 @@ _enable_banner_in_sshd_config() {
     echo -e "\n${C_BLUE}⚙️ Configuring sshd_config...${C_RESET}"
     sed -i.bak -E 's/^( *Banner *).*/#\1/' /etc/ssh/sshd_config
     if ! grep -q -E "^Banner $SSH_BANNER_FILE" /etc/ssh/sshd_config; then
-        echo -e "\n# FirewallFalcon SSH Banner\nBanner $SSH_BANNER_FILE" >> /etc/ssh/sshd_config
+        echo -e "\n# ${APP_BASE_DIR_NAME^} SSH Banner\nBanner $SSH_BANNER_FILE" >> /etc/ssh/sshd_config
     fi
     echo -e "${C_GREEN}✅ sshd_config updated.${C_RESET}"
 }
@@ -3173,8 +3178,8 @@ uninstall_script() {
     echo -e "\n${C_BLUE}--- 💥 Starting Uninstallation 💥 ---${C_RESET}"
     
     echo -e "\n${C_BLUE}🗑️ Removing active limiter service...${C_RESET}"
-    systemctl stop firewallfalcon-limiter &>/dev/null
-    systemctl disable firewallfalcon-limiter &>/dev/null
+    systemctl stop ${APP_BASE_DIR_NAME}-limiter &>/dev/null
+    systemctl disable ${APP_BASE_DIR_NAME}-limiter &>/dev/null
     rm -f "$LIMITER_SERVICE"
     rm -f "$LIMITER_SCRIPT"
     
