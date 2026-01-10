@@ -2262,20 +2262,98 @@ HAS_IPV6="$HAS_IPV6"
 MTU_VALUE="$mtu_value"
 KEY_FILE_PATH="$DNSTT_KEYS_DIR"
 EOF
-    if ! systemctl daemon-reload; then
-        echo -e "${C_RED}❌ Failed to reload systemd daemon.${C_RESET}"
-        return 1
+    # Reload systemd daemon
+    if ! systemctl daemon-reload 2>/dev/null; then
+        echo -e "${C_YELLOW}⚠️ Warning: systemd daemon-reload had issues, but continuing...${C_RESET}"
+    else
+        echo -e "${C_GREEN}✅ Systemd daemon reloaded successfully${C_RESET}"
+    fi
+    sleep 1
+    
+    # Enable and start DNSTT service with retry logic
+    local enable_attempts=0
+    local start_attempts=0
+    local max_attempts=3
+    local service_enabled=false
+    local service_started=false
+    
+    # Enable service
+    while [[ $enable_attempts -lt $max_attempts ]]; do
+        enable_attempts=$((enable_attempts + 1))
+        if systemctl enable dnstt.service 2>/dev/null; then
+            service_enabled=true
+            echo -e "${C_GREEN}✅ DNSTT service enabled successfully${C_RESET}"
+            break
+        else
+            if [[ $enable_attempts -lt $max_attempts ]]; then
+                echo -e "${C_YELLOW}⚠️ Enable attempt $enable_attempts failed, retrying...${C_RESET}"
+                systemctl daemon-reload 2>/dev/null
+                sleep 1
+            fi
+        fi
+    done
+    
+    if [[ "$service_enabled" != "true" ]]; then
+        echo -e "${C_YELLOW}⚠️ Warning: Failed to enable DNSTT service after $max_attempts attempts, but continuing...${C_RESET}"
     fi
     
-    if ! systemctl enable dnstt.service; then
-        echo -e "${C_RED}❌ Failed to enable DNSTT service.${C_RESET}"
-        return 1
-    fi
+    # Start service with diagnostics and auto-fix
+    while [[ $start_attempts -lt $max_attempts ]]; do
+        start_attempts=$((start_attempts + 1))
+        
+        if systemctl start dnstt.service 2>/dev/null; then
+            sleep 3
+            if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                service_started=true
+                break
+            else
+                echo -e "${C_YELLOW}⚠️ Service started but is not active. Diagnosing...${C_RESET}"
+            fi
+        fi
+        
+        if [[ $start_attempts -lt $max_attempts ]]; then
+            echo -e "${C_YELLOW}⚠️ Start attempt $start_attempts failed. Diagnosing and fixing...${C_RESET}"
+            
+            # Diagnose issues
+            local error_log=$(journalctl -u dnstt.service -n 20 --no-pager 2>/dev/null)
+            
+            # Check for binary permission issues
+            if [[ -f "$DNSTT_BINARY" ]] && [[ ! -x "$DNSTT_BINARY" ]]; then
+                echo -e "${C_BLUE}🔧 Fixing: Binary not executable. Adding execute permissions...${C_RESET}"
+                chmod +x "$DNSTT_BINARY" 2>/dev/null
+            fi
+            
+            # Check for missing binary
+            if [[ ! -f "$DNSTT_BINARY" ]]; then
+                echo -e "${C_RED}❌ DNSTT binary not found at: $DNSTT_BINARY${C_RESET}"
+                return 1
+            fi
+            
+            # Check for missing key files
+            if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]] || [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
+                echo -e "${C_RED}❌ DNSTT key files not found. Keys are required.${C_RESET}"
+                return 1
+            fi
+            
+            # Check for port conflicts
+            if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s' && ! ss -lunp 2>/dev/null | grep -qE 'dnstt.*:5300\s'; then
+                local port_conflict=$(ss -lunp 2>/dev/null | grep -E ':(5300|:5300)\s' | head -n1)
+                echo -e "${C_YELLOW}⚠️ Port 5300 is in use: $port_conflict${C_RESET}"
+                echo -e "${C_BLUE}🔧 Attempting to free port 5300...${C_RESET}"
+                pkill -f "dnstt.*5300" 2>/dev/null
+                sleep 2
+            fi
+            
+            # Reload daemon before retry
+            systemctl daemon-reload 2>/dev/null
+            sleep 2
+        fi
+    done
     
-    # Start DNSTT service
-    if ! systemctl start dnstt.service; then
-        echo -e "${C_RED}❌ Failed to start DNSTT service.${C_RESET}"
-        journalctl -u dnstt.service -n 20 --no-pager
+    if [[ "$service_started" != "true" ]]; then
+        echo -e "${C_RED}❌ Failed to start DNSTT service after $max_attempts attempts.${C_RESET}"
+        echo -e "${C_YELLOW}📋 Showing service logs:${C_RESET}"
+        journalctl -u dnstt.service -n 30 --no-pager 2>/dev/null || true
         return 1
     fi
     
@@ -2303,54 +2381,161 @@ EOF
         return 1
     fi
     
+    # Validate DNSTT service is running and port 5300 is listening
+    local dnstt_started=false
+    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+        if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+            echo -e "${C_GREEN}✅ DNSTT server (port 5300) started successfully and is listening.${C_RESET}"
+            dnstt_started=true
+        else
+            echo -e "${C_YELLOW}⚠️ DNSTT service is active but port 5300 is not listening. Waiting and retrying...${C_RESET}"
+            sleep 3
+            if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+                echo -e "${C_GREEN}✅ Port 5300 is now listening.${C_RESET}"
+                dnstt_started=true
+            else
+                echo -e "${C_YELLOW}⚠️ Port 5300 still not listening. Check logs: journalctl -u dnstt.service${C_RESET}"
+                journalctl -u dnstt.service -n 20 --no-pager 2>/dev/null || true
+            fi
+        fi
+    else
+        echo -e "${C_RED}❌ DNSTT service is not active after start attempts.${C_RESET}"
+        journalctl -u dnstt.service -n 30 --no-pager 2>/dev/null || true
+        return 1
+    fi
+    
     if [[ "$dnstt_started" == "true" ]]; then
-        # Start EDNS proxy service
-        if ! systemctl enable dnstt-edns-proxy.service; then
-            echo -e "${C_YELLOW}⚠️ Failed to enable EDNS proxy service.${C_RESET}"
+        # Start EDNS proxy service with retry logic
+        echo -e "\n${C_BLUE}🚀 Starting EDNS proxy service...${C_RESET}"
+        
+        local edns_enable_attempts=0
+        local edns_start_attempts=0
+        local edns_service_enabled=false
+        local edns_service_started=false
+        
+        # Enable service
+        while [[ $edns_enable_attempts -lt $max_attempts ]]; do
+            edns_enable_attempts=$((edns_enable_attempts + 1))
+            if systemctl enable dnstt-edns-proxy.service 2>/dev/null; then
+                edns_service_enabled=true
+                echo -e "${C_GREEN}✅ EDNS proxy service enabled successfully${C_RESET}"
+                break
+            else
+                if [[ $edns_enable_attempts -lt $max_attempts ]]; then
+                    echo -e "${C_YELLOW}⚠️ Enable attempt $edns_enable_attempts failed, retrying...${C_RESET}"
+                    systemctl daemon-reload 2>/dev/null
+                    sleep 1
+                fi
+            fi
+        done
+        
+        if [[ "$edns_service_enabled" != "true" ]]; then
+            echo -e "${C_YELLOW}⚠️ Warning: Failed to enable EDNS proxy service after $max_attempts attempts, but continuing...${C_RESET}"
         fi
         
-        # Ensure port 53 is still free
-        if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s' && ! ss -lunp 2>/dev/null | grep -qE 'python3.*:53\s'; then
-            echo -e "${C_YELLOW}⚠️ Port 53 is still in use. Attempting to free it...${C_RESET}"
-            pkill -9 systemd-resolved 2>/dev/null
-            sleep 2
-        fi
-        
-        if ! systemctl start dnstt-edns-proxy.service; then
-            echo -e "${C_YELLOW}⚠️ Failed to start EDNS proxy service.${C_RESET}"
-            journalctl -u dnstt-edns-proxy.service -n 20 --no-pager
-            echo -e "${C_YELLOW}💡 Trying to diagnose the issue...${C_RESET}"
-            if [ ! -f "$DNSTT_EDNS_PROXY" ]; then
-                echo -e "${C_RED}❌ EDNS proxy script not found at: $DNSTT_EDNS_PROXY${C_RESET}"
-            elif [ ! -x "$DNSTT_EDNS_PROXY" ]; then
-                echo -e "${C_YELLOW}⚠️ EDNS proxy script is not executable. Fixing...${C_RESET}"
-                chmod +x "$DNSTT_EDNS_PROXY"
-                systemctl restart dnstt-edns-proxy.service
-                sleep 2
+        # Ensure port 53 is free (kill systemd-resolved and other conflicts)
+        echo -e "${C_BLUE}🔍 Checking port 53 availability...${C_RESET}"
+        if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+            local port53_process=$(ss -lunp 2>/dev/null | grep -E ':(53|:53)\s' | head -n1)
+            if ! echo "$port53_process" | grep -qE 'python3.*:53\s'; then
+                echo -e "${C_YELLOW}⚠️ Port 53 is in use: $port53_process${C_RESET}"
+                echo -e "${C_BLUE}🔧 Attempting to free port 53...${C_RESET}"
+                
+                # Stop systemd-resolved if running
+                if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+                    systemctl stop systemd-resolved 2>/dev/null
+                    systemctl disable systemd-resolved 2>/dev/null
+                    systemctl mask systemd-resolved 2>/dev/null
+                    echo -e "${C_GREEN}✅ Stopped systemd-resolved${C_RESET}"
+                fi
+                
+                # Kill any remaining processes
+                pkill -9 systemd-resolved 2>/dev/null
+                pkill -9 dnstt-edns-proxy 2>/dev/null
+                sleep 3
+                
+                # Verify port is free
+                if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+                    echo -e "${C_YELLOW}⚠️ Port 53 still in use after cleanup attempt${C_RESET}"
+                else
+                    echo -e "${C_GREEN}✅ Port 53 is now free${C_RESET}"
+                fi
             fi
         fi
         
-        sleep 3
+        # Start service with diagnostics and auto-fix
+        while [[ $edns_start_attempts -lt $max_attempts ]]; do
+            edns_start_attempts=$((edns_start_attempts + 1))
+            
+            if systemctl start dnstt-edns-proxy.service 2>/dev/null; then
+                sleep 3
+                if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                    edns_service_started=true
+                    break
+                else
+                    echo -e "${C_YELLOW}⚠️ Service started but is not active. Diagnosing...${C_RESET}"
+                fi
+            fi
+            
+            if [[ $edns_start_attempts -lt $max_attempts ]]; then
+                echo -e "${C_YELLOW}⚠️ Start attempt $edns_start_attempts failed. Diagnosing and fixing...${C_RESET}"
+                
+                # Check for script file issues
+                if [ ! -f "$DNSTT_EDNS_PROXY" ]; then
+                    echo -e "${C_RED}❌ EDNS proxy script not found at: $DNSTT_EDNS_PROXY${C_RESET}"
+                    return 1
+                elif [ ! -x "$DNSTT_EDNS_PROXY" ]; then
+                    echo -e "${C_BLUE}🔧 Fixing: Script not executable. Adding execute permissions...${C_RESET}"
+                    chmod +x "$DNSTT_EDNS_PROXY" 2>/dev/null
+                fi
+                
+                # Check for Python3
+                if ! command -v python3 &> /dev/null; then
+                    echo -e "${C_RED}❌ Python3 is not installed. Installing...${C_RESET}"
+                    apt-get update && apt-get install -y python3 2>/dev/null || yum install -y python3 2>/dev/null || echo -e "${C_RED}Failed to install python3${C_RESET}"
+                fi
+                
+                # Check script syntax
+                if ! python3 -m py_compile "$DNSTT_EDNS_PROXY" 2>/dev/null; then
+                    echo -e "${C_YELLOW}⚠️ EDNS proxy script has syntax errors${C_RESET}"
+                fi
+                
+                # Reload daemon before retry
+                systemctl daemon-reload 2>/dev/null
+                sleep 2
+            fi
+        done
+        
+        if [[ "$edns_service_started" != "true" ]]; then
+            echo -e "${C_YELLOW}⚠️ Failed to start EDNS proxy service after $max_attempts attempts.${C_RESET}"
+            echo -e "${C_YELLOW}📋 Showing service logs:${C_RESET}"
+            journalctl -u dnstt-edns-proxy.service -n 30 --no-pager 2>/dev/null || true
+        fi
         
         # Validate EDNS proxy is running and port 53 is listening
         local edns_started=false
-        if systemctl is-active --quiet dnstt-edns-proxy.service; then
-            if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s' && ss -lunp 2>/dev/null | grep -qE 'python3.*:53\s'; then
-                echo -e "${C_GREEN}✅ EDNS proxy (port 53) started successfully and is listening.${C_RESET}"
-                edns_started=true
-            else
-                echo -e "${C_YELLOW}⚠️ EDNS proxy service is active but port 53 may not be listening properly.${C_RESET}"
-                journalctl -u dnstt-edns-proxy.service -n 20 --no-pager
-                sleep 2
-                # Retry check
+        if [[ "$edns_service_started" == "true" ]]; then
+            sleep 2
+            if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
                 if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
-                    echo -e "${C_GREEN}✅ Port 53 is now listening.${C_RESET}"
+                    echo -e "${C_GREEN}✅ EDNS proxy (port 53) started successfully and is listening.${C_RESET}"
                     edns_started=true
+                else
+                    echo -e "${C_YELLOW}⚠️ EDNS proxy service is active but port 53 may not be listening properly. Waiting...${C_RESET}"
+                    sleep 3
+                    # Retry check
+                    if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+                        echo -e "${C_GREEN}✅ Port 53 is now listening.${C_RESET}"
+                        edns_started=true
+                    else
+                        echo -e "${C_YELLOW}⚠️ Port 53 still not listening. Check logs: journalctl -u dnstt-edns-proxy.service${C_RESET}"
+                        journalctl -u dnstt-edns-proxy.service -n 20 --no-pager 2>/dev/null || true
+                    fi
                 fi
+            else
+                echo -e "${C_YELLOW}⚠️ EDNS proxy service is not active after start attempts.${C_RESET}"
+                journalctl -u dnstt-edns-proxy.service -n 30 --no-pager 2>/dev/null || true
             fi
-        else
-            echo -e "${C_YELLOW}⚠️ EDNS proxy service is not active.${C_RESET}"
-            journalctl -u dnstt-edns-proxy.service -n 20 --no-pager
         fi
         
         if [[ "$dnstt_started" == "true" ]] && [[ "$edns_started" == "true" ]]; then
@@ -2909,19 +3094,88 @@ WantedBy=multi-user.target
 EOF
 
     echo -e "\n${C_GREEN}▶️ Enabling and starting HTTP Custom service...${C_RESET}"
-    systemctl daemon-reload
-    systemctl enable http-custom.service
-    systemctl start http-custom.service
-    sleep 2
-
+    
+    # Reload systemd daemon
+    systemctl daemon-reload 2>/dev/null || true
+    sleep 1
+    
+    # Enable and start HTTP Custom service with retry logic
+    local http_enable_attempts=0
+    local http_start_attempts=0
+    local http_service_enabled=false
+    local http_service_started=false
+    
+    # Enable service
+    while [[ $http_enable_attempts -lt 3 ]]; do
+        http_enable_attempts=$((http_enable_attempts + 1))
+        if systemctl enable http-custom.service 2>/dev/null || systemctl enable http-custom 2>/dev/null; then
+            http_service_enabled=true
+            echo -e "${C_GREEN}✅ HTTP Custom service enabled successfully${C_RESET}"
+            break
+        else
+            if [[ $http_enable_attempts -lt 3 ]]; then
+                echo -e "${C_YELLOW}⚠️ Enable attempt $http_enable_attempts failed, retrying...${C_RESET}"
+                systemctl daemon-reload 2>/dev/null
+                sleep 1
+            fi
+        fi
+    done
+    
+    if [[ "$http_service_enabled" != "true" ]]; then
+        echo -e "${C_YELLOW}⚠️ Warning: Failed to enable HTTP Custom service after 3 attempts, but continuing...${C_RESET}"
+    fi
+    
+    # Check for port conflicts before starting
+    if ss -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s" || netstat -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s"; then
+        local port_conflict=$(ss -lntp 2>/dev/null | grep -E ":${HTTP_CUSTOM_PORT}\s" | head -n1 || netstat -lntp 2>/dev/null | grep -E ":${HTTP_CUSTOM_PORT}\s" | head -n1)
+        if ! echo "$port_conflict" | grep -qE "http-custom|httpcustom"; then
+            echo -e "${C_YELLOW}⚠️ Port $HTTP_CUSTOM_PORT is in use: $port_conflict${C_RESET}"
+            echo -e "${C_BLUE}🔧 Attempting to free port $HTTP_CUSTOM_PORT...${C_RESET}"
+            pkill -f "http-custom.*${HTTP_CUSTOM_PORT}" 2>/dev/null
+            sleep 2
+        fi
+    fi
+    
+    # Start service with diagnostics and auto-fix
+    while [[ $http_start_attempts -lt 3 ]]; do
+        http_start_attempts=$((http_start_attempts + 1))
+        
+        if systemctl start http-custom.service 2>/dev/null || systemctl start http-custom 2>/dev/null; then
+            sleep 3
+            if systemctl is-active --quiet http-custom.service 2>/dev/null || systemctl is-active --quiet http-custom 2>/dev/null; then
+                http_service_started=true
+                break
+            else
+                echo -e "${C_YELLOW}⚠️ Service started but is not active. Diagnosing...${C_RESET}"
+            fi
+        fi
+        
+        if [[ $http_start_attempts -lt 3 ]]; then
+            echo -e "${C_YELLOW}⚠️ Start attempt $http_start_attempts failed. Diagnosing and fixing...${C_RESET}"
+            
+            # Check for binary permission issues
+            if [[ -f "$HTTP_CUSTOM_BINARY" ]] && [[ ! -x "$HTTP_CUSTOM_BINARY" ]]; then
+                echo -e "${C_BLUE}🔧 Fixing: Binary not executable. Adding execute permissions...${C_RESET}"
+                chmod +x "$HTTP_CUSTOM_BINARY" 2>/dev/null
+            fi
+            
+            # Check for missing binary
+            if [[ ! -f "$HTTP_CUSTOM_BINARY" ]]; then
+                echo -e "${C_RED}❌ HTTP Custom binary not found at: $HTTP_CUSTOM_BINARY${C_RESET}"
+                return 1
+            fi
+            
+            # Reload daemon before retry
+            systemctl daemon-reload 2>/dev/null
+            sleep 2
+        fi
+    done
+    
     # Check service status with multiple methods - improved detection
     local http_custom_started=false
-    sleep 3  # Give service time to fully start
     
     # Try multiple service name formats
-    if systemctl is-active --quiet http-custom.service 2>/dev/null; then
-        http_custom_started=true
-    elif systemctl is-active --quiet http-custom 2>/dev/null; then
+    if [[ "$http_service_started" == "true" ]] || systemctl is-active --quiet http-custom.service 2>/dev/null || systemctl is-active --quiet http-custom 2>/dev/null; then
         http_custom_started=true
     elif ss -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s" || netstat -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s" || lsof -i TCP:${HTTP_CUSTOM_PORT} 2>/dev/null | grep -q LISTEN; then
         # Port is listening, service might be running but systemd doesn't recognize it
