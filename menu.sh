@@ -55,26 +55,58 @@ LIMITER_LOCK_DURATION="120"         # Lock duration in seconds when limit exceed
 # END OF MANUAL CONFIGURATION SECTION
 # =============================================================================
 
+# Color Definitions - Enhanced Modern Palette
 C_RESET='\033[0m'
 C_BOLD='\033[1m'
 C_DIM='\033[2m'
-C_WHITE='\033[97m'
+C_ITALIC='\033[3m'
+C_UNDERLINE='\033[4m'
+C_BLINK='\033[5m'
+C_REVERSE='\033[7m'
+C_HIDDEN='\033[8m'
 
-C_RED='\033[91m'
-C_GREEN='\033[92m'
-C_YELLOW='\033[93m'
-C_BLUE='\033[94m'
-C_PURPLE='\033[95m'
-C_CYAN='\033[96m'
+# Standard Colors
+C_BLACK='\033[30m'
+C_RED='\033[31m'
+C_GREEN='\033[32m'
+C_YELLOW='\033[33m'
+C_BLUE='\033[34m'
+C_MAGENTA='\033[35m'
+C_CYAN='\033[36m'
+C_WHITE='\033[37m'
 
-C_TITLE=$C_PURPLE
-C_CHOICE=$C_GREEN
-C_PROMPT=$C_BLUE
-C_WARN=$C_YELLOW
-C_DANGER=$C_RED
-C_STATUS_A=$C_GREEN
-C_STATUS_I=$C_DIM
-C_ACCENT=$C_CYAN
+# Bright Colors (for better visibility)
+C_BRIGHT_BLACK='\033[90m'
+C_BRIGHT_RED='\033[91m'
+C_BRIGHT_GREEN='\033[92m'
+C_BRIGHT_YELLOW='\033[93m'
+C_BRIGHT_BLUE='\033[94m'
+C_BRIGHT_MAGENTA='\033[95m'
+C_BRIGHT_CYAN='\033[96m'
+C_BRIGHT_WHITE='\033[97m'
+
+# Background Colors
+C_BG_BLACK='\033[40m'
+C_BG_RED='\033[41m'
+C_BG_GREEN='\033[42m'
+C_BG_YELLOW='\033[43m'
+C_BG_BLUE='\033[44m'
+C_BG_MAGENTA='\033[45m'
+C_BG_CYAN='\033[46m'
+C_BG_WHITE='\033[47m'
+
+# Semantic Colors for UI Components
+C_TITLE=$C_BRIGHT_CYAN          # Title - Bright Cyan
+C_CHOICE=$C_BRIGHT_GREEN         # Menu choices - Bright Green
+C_PROMPT=$C_BRIGHT_BLUE          # Input prompts - Bright Blue
+C_WARN=$C_BRIGHT_YELLOW          # Warnings - Bright Yellow
+C_DANGER=$C_BRIGHT_RED           # Danger/Errors - Bright Red
+C_STATUS_A=$C_BRIGHT_GREEN       # Active status - Bright Green
+C_STATUS_I=$C_DIM                # Inactive status - Dim
+C_ACCENT=$C_BRIGHT_MAGENTA       # Accent color - Bright Magenta
+C_INFO=$C_BRIGHT_CYAN            # Info messages - Bright Cyan
+C_SUCCESS=$C_BRIGHT_GREEN        # Success messages - Bright Green
+C_ERROR=$C_BRIGHT_RED            # Error messages - Bright Red
 
 DB_DIR="$APP_BASE_DIR"
 DB_FILE="$DB_DIR/users.db"
@@ -107,6 +139,10 @@ ZIVPN_SERVICE_FILE="/etc/systemd/system/zivpn.service"
 ZIVPN_CONFIG_FILE="$ZIVPN_DIR/config.json"
 ZIVPN_CERT_FILE="$ZIVPN_DIR/zivpn.crt"
 ZIVPN_KEY_FILE="$ZIVPN_DIR/zivpn.key"
+
+# --- iptables Variables ---
+IPTABLES_CONFIG_FILE="/etc/iptables/rules.v4"
+IPTABLES_SCRIPT_FILE="$APP_BASE_DIR/iptables-rules.sh"
 
 SELECTED_USER=""
 UNINSTALL_MODE="interactive"
@@ -2245,6 +2281,10 @@ EOF
             echo -e "${C_YELLOW}   The key is stored at: ${C_WHITE}$DNSTT_KEYS_DIR/server.pub${C_RESET}"
             echo -e "${C_YELLOW}   This key will be reused on reinstallations unless manually deleted${C_RESET}"
             
+            # Auto-configure DNS forwarding and SSH when VPN (DNSTT) is connected
+            echo -e "\n${C_BLUE}⚙️ Auto-configuring VPN services (DNS forwarding & SSH)...${C_RESET}"
+            setup_vpn_auto_config
+            
             # Get server IP address for DNS configuration
             local server_ip=""
             if command -v hostname &> /dev/null; then
@@ -2273,6 +2313,10 @@ EOF
                 echo -e "  ${C_YELLOW}⚠️${C_RESET} ${C_WHITE}Nameserver domain not configured. Please reconfigure DNSTT with nameserver domain.${C_RESET}"
             fi
             echo -e "${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            
+            # Auto-configure DNS forwarding and SSH when VPN (DNSTT) is connected
+            echo -e "\n${C_BLUE}⚙️ Auto-configuring VPN services (DNS forwarding & SSH)...${C_RESET}"
+            setup_vpn_auto_config
             
             show_dnstt_details
         elif [[ "$dnstt_started" == "true" ]]; then
@@ -2693,6 +2737,777 @@ uninstall_zivpn() {
     echo -e "\n${C_GREEN}✅ ZiVPN Uninstalled Successfully.${C_RESET}"
 }
 
+# =============================================================================
+# HTTP Custom Protocol Support
+# =============================================================================
+HTTP_CUSTOM_DIR="/root/http-custom"
+HTTP_CUSTOM_BINARY="/usr/local/bin/http-custom"
+HTTP_CUSTOM_SERVICE_FILE="/etc/systemd/system/http-custom.service"
+HTTP_CUSTOM_PORT="3128"
+
+install_http_custom() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🌐 Installing HTTP Custom ---${C_RESET}"
+    if [ -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
+        echo -e "\n${C_YELLOW}ℹ️ HTTP Custom is already installed.${C_RESET}"
+        if systemctl is-active --quiet http-custom; then
+            echo -e "${C_GREEN}✅ HTTP Custom service is active.${C_RESET}"
+        else
+            echo -e "${C_YELLOW}⚠️ HTTP Custom service is not running.${C_RESET}"
+            read -p "👉 Do you want to start it? (y/n): " start_confirm
+            if [[ "$start_confirm" == "y" ]]; then
+                systemctl start http-custom
+                sleep 2
+                if systemctl is-active --quiet http-custom; then
+                    echo -e "${C_GREEN}✅ HTTP Custom started successfully.${C_RESET}"
+                fi
+            fi
+        fi
+        return
+    fi
+
+    check_and_open_firewall_port "$HTTP_CUSTOM_PORT" tcp || return
+
+    echo -e "\n${C_GREEN}⚙️ Creating directory for HTTP Custom...${C_RESET}"
+    rm -rf "$HTTP_CUSTOM_DIR"
+    mkdir -p "$HTTP_CUSTOM_DIR"
+
+    echo -e "\n${C_GREEN}⚙️ Detecting system architecture...${C_RESET}"
+    local arch
+    arch=$(uname -m)
+    local binary_url=""
+    if [[ "$arch" == "x86_64" ]]; then
+        binary_url="https://github.com/firewallfalcons/FirewallFalcon-Manager/raw/main/http-custom/http-custom-linux-amd64"
+        echo -e "${C_BLUE}ℹ️ Detected x86_64 (amd64) architecture.${C_RESET}"
+    elif [[ "$arch" == "aarch64" || "$arch" == "arm64" ]]; then
+        binary_url="https://github.com/firewallfalcons/FirewallFalcon-Manager/raw/main/http-custom/http-custom-linux-arm64"
+        echo -e "${C_BLUE}ℹ️ Detected ARM64 architecture.${C_RESET}"
+    else
+        echo -e "\n${C_RED}❌ Unsupported architecture: $arch. Cannot install HTTP Custom.${C_RESET}"
+        rm -rf "$HTTP_CUSTOM_DIR"
+        return
+    fi
+
+    read -p "👉 Enter HTTP Custom port (press Enter for default $HTTP_CUSTOM_PORT): " custom_port
+    if [[ -n "$custom_port" ]] && [[ "$custom_port" =~ ^[0-9]+$ ]]; then
+        HTTP_CUSTOM_PORT="$custom_port"
+    fi
+
+    echo -e "\n${C_GREEN}📥 Downloading HTTP Custom binary...${C_RESET}"
+    if ! wget -q --show-progress -O "$HTTP_CUSTOM_DIR/http-custom" "$binary_url"; then
+        echo -e "\n${C_RED}❌ Failed to download the HTTP Custom binary from $binary_url${C_RESET}"
+        rm -rf "$HTTP_CUSTOM_DIR"
+        return 1
+    fi
+
+    if [[ ! -f "$HTTP_CUSTOM_DIR/http-custom" ]] || [[ ! -s "$HTTP_CUSTOM_DIR/http-custom" ]]; then
+        echo -e "\n${C_RED}❌ Downloaded file is empty or missing.${C_RESET}"
+        rm -rf "$HTTP_CUSTOM_DIR"
+        return 1
+    fi
+
+    chmod +x "$HTTP_CUSTOM_DIR/http-custom"
+    cp "$HTTP_CUSTOM_DIR/http-custom" "$HTTP_CUSTOM_BINARY"
+
+    echo -e "\n${C_GREEN}📝 Creating systemd service...${C_RESET}"
+    cat > "$HTTP_CUSTOM_SERVICE_FILE" <<EOF
+[Unit]
+Description=HTTP Custom Proxy Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$HTTP_CUSTOM_DIR
+ExecStart=$HTTP_CUSTOM_BINARY -addr :$HTTP_CUSTOM_PORT
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    echo -e "\n${C_GREEN}▶️ Enabling and starting HTTP Custom service...${C_RESET}"
+    systemctl daemon-reload
+    systemctl enable http-custom.service
+    systemctl start http-custom.service
+    sleep 2
+
+    if systemctl is-active --quiet http-custom; then
+        echo -e "\n${C_GREEN}✅ SUCCESS: HTTP Custom is installed and active on port $HTTP_CUSTOM_PORT.${C_RESET}"
+        echo -e "${C_CYAN}ℹ️ HTTP Custom is now running and ready to accept connections.${C_RESET}"
+        echo -e "${C_YELLOW}💡 Configure your client to connect to this server's IP on port $HTTP_CUSTOM_PORT${C_RESET}"
+        
+        # Auto-configure DNS forwarding and SSH when HTTP Custom (proxy) is installed
+        echo -e "\n${C_BLUE}⚙️ Auto-configuring VPN services (DNS forwarding & SSH)...${C_RESET}"
+        setup_vpn_auto_config
+    else
+        echo -e "\n${C_RED}❌ ERROR: HTTP Custom service failed to start.${C_RESET}"
+        echo -e "${C_YELLOW}ℹ️ Displaying last 15 lines of the service log for diagnostics:${C_RESET}"
+        journalctl -u http-custom.service -n 15 --no-pager
+    fi
+}
+
+uninstall_http_custom() {
+    echo -e "\n${C_BOLD}${C_PURPLE}--- 🗑️ Uninstalling HTTP Custom ---${C_RESET}"
+    if [ ! -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
+        echo -e "${C_YELLOW}ℹ️ HTTP Custom is not installed, skipping.${C_RESET}"
+        return
+    fi
+    echo -e "${C_GREEN}🛑 Stopping and disabling HTTP Custom service...${C_RESET}"
+    systemctl stop http-custom.service >/dev/null 2>&1
+    systemctl disable http-custom.service >/dev/null 2>&1
+    echo -e "${C_GREEN}🗑️ Removing systemd service file...${C_RESET}"
+    rm -f "$HTTP_CUSTOM_SERVICE_FILE"
+    systemctl daemon-reload
+    echo -e "${C_GREEN}🗑️ Removing HTTP Custom directory and files...${C_RESET}"
+    rm -rf "$HTTP_CUSTOM_DIR"
+    rm -f "$HTTP_CUSTOM_BINARY"
+    echo -e "${C_GREEN}✅ HTTP Custom has been uninstalled successfully.${C_RESET}"
+}
+
+# =============================================================================
+# iptables Configuration & Management
+# =============================================================================
+
+configure_iptables() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🔥 iptables Configuration ---${C_RESET}"
+    
+    # Check if iptables is installed
+    if ! command -v iptables &> /dev/null; then
+        echo -e "\n${C_YELLOW}⚠️ iptables not found. Installing...${C_RESET}"
+        apt-get update >/dev/null 2>&1
+        if ! apt-get install -y iptables iptables-persistent >/dev/null 2>&1; then
+            echo -e "${C_RED}❌ Failed to install iptables.${C_RESET}"
+            return 1
+        fi
+        echo -e "${C_GREEN}✅ iptables installed successfully.${C_RESET}"
+    fi
+    
+    # Create iptables directory if it doesn't exist
+    mkdir -p /etc/iptables
+    
+    echo -e "\n${C_BLUE}📝 Creating comprehensive iptables rules...${C_RESET}"
+    
+    # Backup existing rules
+    if [ -f "$IPTABLES_CONFIG_FILE" ]; then
+        cp "$IPTABLES_CONFIG_FILE" "${IPTABLES_CONFIG_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
+        echo -e "${C_GREEN}✅ Backup of existing rules created.${C_RESET}"
+    fi
+    
+    # Create iptables rules script
+    cat > "$IPTABLES_SCRIPT_FILE" <<'IPTABLES_EOF'
+#!/bin/bash
+# iptables Rules for VPN Server
+# Generated by MRCYBER255-KITONGA Manager
+
+# Flush existing rules
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t nat -X
+iptables -t mangle -F
+iptables -t mangle -X
+
+# Set default policies
+iptables -P INPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
+
+# Allow loopback
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A OUTPUT -o lo -j ACCEPT
+
+# Allow established and related connections
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Allow SSH (port 22)
+iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+
+# Allow common VPN ports (DNSTT, OpenVPN, WireGuard, etc.)
+# DNSTT
+iptables -A INPUT -p udp --dport 53 -j ACCEPT
+iptables -A INPUT -p udp --dport 5300 -j ACCEPT
+
+# OpenVPN
+iptables -A INPUT -p udp --dport 1194 -j ACCEPT
+iptables -A INPUT -p tcp --dport 1194 -j ACCEPT
+
+# WireGuard
+iptables -A INPUT -p udp --dport 51820 -j ACCEPT
+
+# VPN Services
+iptables -A INPUT -p tcp --dport 444 -j ACCEPT  # SSL Tunnel
+iptables -A INPUT -p tcp --dport 8080 -j ACCEPT  # WebSocket Proxy
+iptables -A INPUT -p tcp --dport 3128 -j ACCEPT  # HTTP Custom
+iptables -A INPUT -p udp --dport 7300 -j ACCEPT  # BadVPN
+iptables -A INPUT -p udp --dport 5667 -j ACCEPT  # ZiVPN
+
+# Nginx/Web Server
+iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+
+# V2Ray/XRay
+iptables -A INPUT -p tcp --dport 8787 -j ACCEPT
+
+# ICMP (ping)
+iptables -A INPUT -p icmp -j ACCEPT
+
+# Allow forwarding for VPN interfaces
+iptables -A FORWARD -i tun+ -j ACCEPT
+iptables -A FORWARD -i tap+ -j ACCEPT
+iptables -A FORWARD -i wg+ -j ACCEPT
+
+# NAT Masquerading for VPN tunnels
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+iptables -t nat -A POSTROUTING -o ens3 -j MASQUERADE
+iptables -t nat -A POSTROUTING -o venet0 -j MASQUERADE
+iptables -t nat -A POSTROUTING -o tun+ -j MASQUERADE
+iptables -t nat -A POSTROUTING -o tap+ -j MASQUERADE
+iptables -t nat -A POSTROUTING -o wg+ -j MASQUERADE
+
+# Enable IP forwarding
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# Save rules (if iptables-persistent is installed)
+if command -v iptables-save &> /dev/null; then
+    iptables-save > /etc/iptables/rules.v4
+    ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
+fi
+
+echo "iptables rules applied successfully"
+IPTABLES_EOF
+
+    chmod +x "$IPTABLES_SCRIPT_FILE"
+    
+    echo -e "\n${C_BLUE}⚙️ Applying iptables rules...${C_RESET}"
+    bash "$IPTABLES_SCRIPT_FILE"
+    
+    # Install iptables-persistent for auto-loading rules on boot
+    if ! dpkg -l | grep -q iptables-persistent; then
+        echo -e "\n${C_BLUE}📦 Installing iptables-persistent for rule persistence...${C_RESET}"
+        echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | debconf-set-selections
+        echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | debconf-set-selections
+        apt-get install -y iptables-persistent >/dev/null 2>&1
+    fi
+    
+    # Save rules to persistent location
+    if command -v netfilter-persistent &> /dev/null; then
+        iptables-save > "$IPTABLES_CONFIG_FILE"
+        netfilter-persistent save >/dev/null 2>&1
+    elif command -v iptables-save &> /dev/null; then
+        iptables-save > "$IPTABLES_CONFIG_FILE"
+    fi
+    
+    echo -e "\n${C_GREEN}✅ iptables rules configured and saved successfully!${C_RESET}"
+    echo -e "${C_CYAN}ℹ️ Rules will be automatically loaded on system boot${C_RESET}"
+    echo -e "${C_YELLOW}💡 View current rules: ${C_WHITE}iptables -L -v -n${C_RESET}"
+    echo -e "${C_YELLOW}💡 View NAT rules: ${C_WHITE}iptables -t nat -L -v -n${C_RESET}"
+}
+
+view_iptables_rules() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🔍 View iptables Rules ---${C_RESET}"
+    echo
+    
+    if ! command -v iptables &> /dev/null; then
+        echo -e "${C_RED}❌ iptables is not installed.${C_RESET}"
+        return 1
+    fi
+    
+    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}  📋 FILTER TABLE (INPUT/FORWARD/OUTPUT)${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    iptables -L -v -n --line-numbers
+    
+    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}  🔀 NAT TABLE (Masquerading)${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    iptables -t nat -L -v -n --line-numbers
+    
+    echo -e "\n${C_BLUE}💡 To view rules in detail, use:${C_RESET}"
+    echo -e "  ${C_YELLOW}iptables -L -v -n${C_RESET} - View filter table"
+    echo -e "  ${C_YELLOW}iptables -t nat -L -v -n${C_RESET} - View NAT table"
+}
+
+reset_iptables_rules() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🗑️ Reset iptables Rules ---${C_RESET}"
+    
+    if ! command -v iptables &> /dev/null; then
+        echo -e "\n${C_YELLOW}ℹ️ iptables is not installed. Nothing to reset.${C_RESET}"
+        return
+    fi
+    
+    read -p "👉 Are you sure you want to reset all iptables rules to default? (y/n): " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo -e "${C_YELLOW}❌ Reset cancelled.${C_RESET}"
+        return
+    fi
+    
+    echo -e "\n${C_BLUE}🔄 Flushing all iptables rules...${C_RESET}"
+    iptables -F
+    iptables -X
+    iptables -t nat -F
+    iptables -t nat -X
+    iptables -t mangle -F
+    iptables -t mangle -X
+    
+    # Set default policies to ACCEPT (be careful!)
+    iptables -P INPUT ACCEPT
+    iptables -P FORWARD ACCEPT
+    iptables -P OUTPUT ACCEPT
+    
+    # Save empty rules
+    if command -v iptables-save &> /dev/null; then
+        iptables-save > "$IPTABLES_CONFIG_FILE"
+        if command -v netfilter-persistent &> /dev/null; then
+            netfilter-persistent save >/dev/null 2>&1
+        fi
+    fi
+    
+    echo -e "${C_GREEN}✅ iptables rules have been reset to default (ACCEPT all).${C_RESET}"
+    echo -e "${C_YELLOW}⚠️ WARNING: All traffic is now allowed. Configure firewall rules immediately!${C_RESET}"
+}
+
+# =============================================================================
+# TCP BBR (Bottleneck Bandwidth and Round-trip propagation time)
+# =============================================================================
+
+enable_tcp_bbr() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🚀 Enable TCP BBR Congestion Control ---${C_RESET}"
+    
+    # Check kernel version (BBR requires Linux 4.9+)
+    local kernel_version
+    kernel_version=$(uname -r | cut -d'.' -f1,2)
+    local kernel_major
+    kernel_major=$(echo "$kernel_version" | cut -d'.' -f1)
+    local kernel_minor
+    kernel_minor=$(echo "$kernel_version" | cut -d'.' -f2)
+    
+    if [[ "$kernel_major" -lt 4 ]] || ([[ "$kernel_major" -eq 4 ]] && [[ "$kernel_minor" -lt 9 ]]); then
+        echo -e "\n${C_RED}❌ ERROR: TCP BBR requires Linux kernel 4.9 or higher.${C_RESET}"
+        echo -e "${C_YELLOW}Current kernel version: $(uname -r)${C_RESET}"
+        echo -e "${C_YELLOW}Please upgrade your kernel to enable TCP BBR.${C_RESET}"
+        return 1
+    fi
+    
+    echo -e "${C_GREEN}✅ Kernel version check passed: $(uname -r)${C_RESET}"
+    
+    # Check if BBR module is available
+    if ! modprobe tcp_bbr 2>/dev/null; then
+        echo -e "\n${C_YELLOW}⚠️ Warning: Could not load tcp_bbr module.${C_RESET}"
+        echo -e "${C_YELLOW}BBR may be built into the kernel. Continuing...${C_RESET}"
+    else
+        echo -e "${C_GREEN}✅ TCP BBR module loaded successfully${C_RESET}"
+    fi
+    
+    # Backup current sysctl configuration
+    if [ -f /etc/sysctl.conf ]; then
+        cp /etc/sysctl.conf /etc/sysctl.conf.bak.$(date +%Y%m%d_%H%M%S)
+        echo -e "${C_GREEN}✅ Backup of /etc/sysctl.conf created${C_RESET}"
+    fi
+    
+    echo -e "\n${C_BLUE}📝 Configuring TCP BBR and network optimizations...${C_RESET}"
+    
+    # Enable TCP BBR
+    cat >> /etc/sysctl.conf <<'BBR_EOF'
+
+# =============================================================================
+# TCP BBR Configuration (Added by MRCYBER255-KITONGA Manager)
+# =============================================================================
+# Enable TCP BBR congestion control algorithm
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+
+# Network optimizations for better performance
+# Increase TCP buffer sizes
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+
+# TCP optimizations
+net.ipv4.tcp_fin_timeout = 30
+net.ipv4.tcp_keepalive_time = 1200
+net.ipv4.tcp_keepalive_probes = 5
+net.ipv4.tcp_keepalive_intvl = 15
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_tw_recycle = 0  # Disabled in newer kernels
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_syn_retries = 2
+net.ipv4.tcp_synack_retries = 2
+net.ipv4.tcp_max_syn_backlog = 8192
+
+# Connection tracking
+net.netfilter.nf_conntrack_max = 1000000
+net.ipv4.ip_conntrack_max = 1000000
+
+# IP forwarding (for VPN)
+net.ipv4.ip_forward = 1
+
+# TCP fast open
+net.ipv4.tcp_fastopen = 3
+
+# Window scaling
+net.ipv4.tcp_window_scaling = 1
+
+# Timestamps
+net.ipv4.tcp_timestamps = 1
+
+# SACK (Selective Acknowledgment)
+net.ipv4.tcp_sack = 1
+BBR_EOF
+
+    # Apply settings immediately
+    echo -e "\n${C_BLUE}⚙️ Applying TCP BBR settings...${C_RESET}"
+    sysctl -p >/dev/null 2>&1
+    
+    # Verify BBR is enabled
+    local current_cc
+    current_cc=$(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')
+    local default_qdisc
+    default_qdisc=$(sysctl net.core.default_qdisc | awk '{print $3}')
+    
+    if [[ "$current_cc" == "bbr" ]]; then
+        echo -e "${C_GREEN}✅ TCP BBR is now active!${C_RESET}"
+        echo -e "${C_CYAN}ℹ️ Current congestion control: ${C_YELLOW}$current_cc${C_RESET}"
+        echo -e "${C_CYAN}ℹ️ Default queuing discipline: ${C_YELLOW}$default_qdisc${C_RESET}"
+        echo -e "\n${C_GREEN}✅ Network optimizations have been applied successfully!${C_RESET}"
+        echo -e "${C_YELLOW}💡 Settings will persist across reboots${C_RESET}"
+    else
+        echo -e "${C_YELLOW}⚠️ Warning: TCP BBR may not be fully active yet.${C_RESET}"
+        echo -e "${C_YELLOW}Current congestion control: $current_cc${C_RESET}"
+        echo -e "${C_YELLOW}You may need to reboot for BBR to take full effect.${C_RESET}"
+    fi
+    
+    # Show BBR status
+    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}  📊 TCP BBR Status${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "  ${C_CYAN}TCP Congestion Control:${C_RESET} $(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')"
+    echo -e "  ${C_CYAN}Default Qdisc:${C_RESET} $(sysctl net.core.default_qdisc | awk '{print $3}')"
+    echo -e "  ${C_CYAN}IP Forwarding:${C_RESET} $(sysctl net.ipv4.ip_forward | awk '{print $3}')"
+    echo -e "  ${C_CYAN}Available Congestion Controls:${C_RESET}"
+    cat /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null | tr ' ' '\n' | sed 's/^/    - /' || echo "    (Unable to read)"
+}
+
+check_tcp_bbr_status() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 📊 TCP BBR Status Check ---${C_RESET}"
+    
+    local kernel_version
+    kernel_version=$(uname -r)
+    local kernel_major
+    kernel_major=$(echo "$kernel_version" | cut -d'.' -f1)
+    local kernel_minor
+    kernel_minor=$(echo "$kernel_version" | cut -d'.' -f2 | cut -d'-' -f1)
+    
+    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}  🖥️ System Information${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "  ${C_CYAN}Kernel Version:${C_RESET} $kernel_version"
+    
+    if [[ "$kernel_major" -lt 4 ]] || ([[ "$kernel_major" -eq 4 ]] && [[ "$kernel_minor" -lt 9 ]]); then
+        echo -e "  ${C_RED}⚠️ BBR Support:${C_RESET} Kernel 4.9+ required (current: $kernel_version)"
+    else
+        echo -e "  ${C_GREEN}✅ BBR Support:${C_RESET} Kernel supports BBR (4.9+)"
+    fi
+    
+    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}  🔧 Current Configuration${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    
+    local current_cc
+    current_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
+    local default_qdisc
+    default_qdisc=$(sysctl net.core.default_qdisc 2>/dev/null | awk '{print $3}')
+    
+    if [[ "$current_cc" == "bbr" ]]; then
+        echo -e "  ${C_GREEN}🟢 TCP Congestion Control:${C_RESET} ${C_GREEN}$current_cc${C_RESET} ✅"
+    else
+        echo -e "  ${C_YELLOW}🟡 TCP Congestion Control:${C_RESET} ${C_YELLOW}$current_cc${C_RESET} (BBR not active)"
+    fi
+    
+    echo -e "  ${C_CYAN}Default Qdisc:${C_RESET} ${default_qdisc:-"(not set)"}"
+    echo -e "  ${C_CYAN}IP Forwarding:${C_RESET} $(sysctl net.ipv4.ip_forward 2>/dev/null | awk '{print $3}')"
+    
+    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}  📋 Available Congestion Controls${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    if [ -f /proc/sys/net/ipv4/tcp_available_congestion_control ]; then
+        cat /proc/sys/net/ipv4/tcp_available_congestion_control | tr ' ' '\n' | sed 's/^/  - /'
+    else
+        echo -e "  ${C_YELLOW}(Unable to read available congestion controls)${C_RESET}"
+    fi
+}
+
+# =============================================================================
+# VPN Connection Detection & Auto-Configuration
+# =============================================================================
+
+detect_vpn_connection() {
+    local vpn_type="NONE"
+    local vpn_active=false
+    
+    # Check OpenVPN
+    if pgrep -x openvpn >/dev/null 2>&1 || systemctl is-active --quiet openvpn* 2>/dev/null; then
+        vpn_type="OpenVPN"
+        vpn_active=true
+    fi
+    
+    # Check DNSTT
+    if systemctl is-active --quiet dnstt.service 2>/dev/null && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+        if [[ "$vpn_type" != "NONE" ]]; then
+            vpn_type="${vpn_type}+DNSTT"
+        else
+            vpn_type="DNSTT"
+        fi
+        vpn_active=true
+    fi
+    
+    # Check other VPN services
+    if ip link show | grep -q "tun\|tap"; then
+        if [[ "$vpn_type" == "NONE" ]]; then
+            local tun_interfaces=$(ip link show | grep -oP 'tun\d+|tap\d+' | head -n1)
+            if [[ -n "$tun_interfaces" ]]; then
+                vpn_type="TUN/TAP ($tun_interfaces)"
+                vpn_active=true
+            fi
+        fi
+    fi
+    
+    # Check WireGuard
+    if command -v wg >/dev/null 2>&1 && wg show >/dev/null 2>&1; then
+        if [[ "$vpn_type" != "NONE" ]]; then
+            vpn_type="${vpn_type}+WireGuard"
+        else
+            vpn_type="WireGuard"
+        fi
+        vpn_active=true
+    fi
+    
+    echo "$vpn_type|$vpn_active"
+}
+
+enable_dns_forwarding() {
+    echo -e "${C_BLUE}🔍 Enabling DNS forwarding...${C_RESET}"
+    
+    # Enable DNS forwarding in systemd-resolved if available
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        if [ -f /etc/systemd/resolved.conf ]; then
+            if ! grep -q "^DNSStubListener=no" /etc/systemd/resolved.conf; then
+                sed -i 's/^#DNSStubListener=.*/DNSStubListener=no/' /etc/systemd/resolved.conf
+                sed -i '/^DNSStubListener=no/!s/^DNSStubListener=.*/DNSStubListener=no/' /etc/systemd/resolved.conf
+                if ! grep -q "^DNSStubListener=no" /etc/systemd/resolved.conf; then
+                    echo "DNSStubListener=no" >> /etc/systemd/resolved.conf
+                fi
+                systemctl restart systemd-resolved 2>/dev/null
+                echo -e "${C_GREEN}✅ DNS forwarding enabled in systemd-resolved${C_RESET}"
+            fi
+        fi
+    fi
+    
+    # Configure DNSTT if installed and not running
+    if [ -f "$DNSTT_SERVICE_FILE" ]; then
+        if ! systemctl is-active --quiet dnstt.service 2>/dev/null; then
+            echo -e "${C_YELLOW}⚠️ DNSTT is installed but not running. Starting...${C_RESET}"
+            systemctl start dnstt.service 2>/dev/null
+            systemctl start dnstt-edns-proxy.service 2>/dev/null
+            sleep 2
+            if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                echo -e "${C_GREEN}✅ DNSTT DNS forwarding enabled${C_RESET}"
+            fi
+        else
+            echo -e "${C_GREEN}✅ DNSTT DNS forwarding already active${C_RESET}"
+        fi
+    fi
+    
+    # Ensure /etc/resolv.conf uses proper DNS
+    if [ ! -L /etc/resolv.conf ] && [ -f /etc/resolv.conf ]; then
+        if ! grep -qE "^nameserver (127.0.0.1|127.0.0.53)" /etc/resolv.conf; then
+            echo -e "${C_YELLOW}⚠️ Configuring /etc/resolv.conf for DNS forwarding...${C_RESET}"
+            sed -i 's/^nameserver.*/nameserver 127.0.0.1/' /etc/resolv.conf
+        fi
+    fi
+}
+
+auto_start_ssh_on_vpn() {
+    local ssh_service_name=""
+    if [ -f /lib/systemd/system/sshd.service ]; then
+        ssh_service_name="sshd.service"
+    elif [ -f /lib/systemd/system/ssh.service ]; then
+        ssh_service_name="ssh.service"
+    else
+        return 1
+    fi
+    
+    if ! systemctl is-active --quiet "$ssh_service_name" 2>/dev/null; then
+        echo -e "${C_BLUE}🔌 Starting SSH service (triggered by VPN connection)...${C_RESET}"
+        systemctl start "$ssh_service_name" 2>/dev/null
+        sleep 2
+        if systemctl is-active --quiet "$ssh_service_name" 2>/dev/null; then
+            echo -e "${C_GREEN}✅ SSH service started successfully${C_RESET}"
+            return 0
+        else
+            echo -e "${C_YELLOW}⚠️ SSH service may already be running or failed to start${C_RESET}"
+            return 1
+        fi
+    else
+        echo -e "${C_GREEN}✅ SSH service is already active${C_RESET}"
+        return 0
+    fi
+}
+
+setup_vpn_auto_config() {
+    local vpn_info
+    vpn_info=$(detect_vpn_connection)
+    local vpn_type=$(echo "$vpn_info" | cut -d'|' -f1)
+    local vpn_active=$(echo "$vpn_info" | cut -d'|' -f2)
+    
+    if [[ "$vpn_active" == "true" ]]; then
+        echo -e "${C_GREEN}✅ VPN Connection Detected: ${C_YELLOW}$vpn_type${C_RESET}"
+        enable_dns_forwarding
+        auto_start_ssh_on_vpn
+        return 0
+    else
+        echo -e "${C_YELLOW}⚠️ No active VPN connection detected${C_RESET}"
+        return 1
+    fi
+}
+
+show_vpn_status() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 📊 VPN & Service Status Dashboard ---${C_RESET}"
+    
+    local vpn_info
+    vpn_info=$(detect_vpn_connection)
+    local vpn_type=$(echo "$vpn_info" | cut -d'|' -f1)
+    local vpn_active=$(echo "$vpn_info" | cut -d'|' -f2)
+    
+    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}  🔐 VPN CONNECTION STATUS${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    
+    if [[ "$vpn_active" == "true" ]]; then
+        echo -e "  ${C_GREEN}🟢 VPN Status:${C_RESET} ${C_GREEN}CONNECTED${C_RESET}"
+        echo -e "  ${C_GREEN}📡 VPN Type:${C_RESET} ${C_YELLOW}$vpn_type${C_RESET}"
+    else
+        echo -e "  ${C_RED}🔴 VPN Status:${C_RESET} ${C_RED}NOT CONNECTED${C_RESET}"
+        echo -e "  ${C_YELLOW}💡 No active VPN connection detected${C_RESET}"
+    fi
+    
+    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}  🔌 SERVICE STATUS${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    
+    # SSH Status
+    local ssh_service_name=""
+    local ssh_status="❌ INACTIVE"
+    local ssh_emoji="🔴"
+    if [ -f /lib/systemd/system/sshd.service ] && systemctl is-active --quiet sshd.service 2>/dev/null; then
+        ssh_service_name="sshd.service"
+        ssh_status="✅ ACTIVE"
+        ssh_emoji="🟢"
+    elif [ -f /lib/systemd/system/ssh.service ] && systemctl is-active --quiet ssh.service 2>/dev/null; then
+        ssh_service_name="ssh.service"
+        ssh_status="✅ ACTIVE"
+        ssh_emoji="🟢"
+    fi
+    echo -e "  ${ssh_emoji} SSH Service: ${ssh_status} ${C_DIM}(${ssh_service_name:-"Not found"})${C_RESET}"
+    
+    # DNSTT Status
+    local dnstt_status="❌ INACTIVE"
+    local dnstt_emoji="🔴"
+    if systemctl is-active --quiet dnstt.service 2>/dev/null && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+        dnstt_status="✅ ACTIVE"
+        dnstt_emoji="🟢"
+    elif systemctl is-active --quiet dnstt.service 2>/dev/null; then
+        dnstt_status="⚠️ PARTIAL (Server only)"
+        dnstt_emoji="🟡"
+    fi
+    echo -e "  ${dnstt_emoji} DNSTT: ${dnstt_status}"
+    
+    # OpenVPN Status
+    local openvpn_status="❌ INACTIVE"
+    local openvpn_emoji="🔴"
+    if pgrep -x openvpn >/dev/null 2>&1 || systemctl is-active --quiet openvpn* 2>/dev/null; then
+        openvpn_status="✅ ACTIVE"
+        openvpn_emoji="🟢"
+    fi
+    echo -e "  ${openvpn_emoji} OpenVPN: ${openvpn_status}"
+    
+    # WireGuard Status
+    local wg_status="❌ INACTIVE"
+    local wg_emoji="🔴"
+    if command -v wg >/dev/null 2>&1 && wg show 2>/dev/null | grep -q "interface"; then
+        wg_status="✅ ACTIVE"
+        wg_emoji="🟢"
+    fi
+    echo -e "  ${wg_emoji} WireGuard: ${wg_status}"
+    
+    # HTTP Custom Status
+    local http_custom_status="❌ INACTIVE"
+    local http_custom_emoji="🔴"
+    if systemctl is-active --quiet http-custom 2>/dev/null; then
+        http_custom_status="✅ ACTIVE (Port $HTTP_CUSTOM_PORT)"
+        http_custom_emoji="🟢"
+    elif [ -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
+        http_custom_status="⚠️ INSTALLED BUT INACTIVE"
+        http_custom_emoji="🟡"
+    fi
+    echo -e "  ${http_custom_emoji} HTTP Custom: ${http_custom_status}"
+    
+    # DNS Forwarding Status
+    local dns_forward_status="❌ INACTIVE"
+    local dns_forward_emoji="🔴"
+    if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null || (systemctl is-active --quiet systemd-resolved 2>/dev/null && grep -q "DNSStubListener=no" /etc/systemd/resolved.conf 2>/dev/null); then
+        dns_forward_status="✅ ACTIVE"
+        dns_forward_emoji="🟢"
+    fi
+    echo -e "  ${dns_forward_emoji} DNS Forwarding: ${dns_forward_status}"
+    
+    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    
+    if [[ "$vpn_active" == "true" ]]; then
+        echo -e "${C_GREEN}✅ All systems are ready for VPN connections${C_RESET}"
+        echo -e "\n${C_YELLOW}💡 Actions:${C_RESET}"
+        echo -e "  ${C_CHOICE}1)${C_RESET} 🔄 Run Auto-Configuration (Enable DNS Forwarding & Start SSH)"
+        echo -e "  ${C_CHOICE}0)${C_RESET} ↩️ Return to Main Menu"
+        echo
+        read -p "$(echo -e ${C_PROMPT}"👉 Select an action: "${C_RESET})" action
+        case $action in
+            1)
+                echo -e "\n${C_BLUE}🔄 Running auto-configuration...${C_RESET}"
+                setup_vpn_auto_config
+                sleep 2
+                ;;
+            0) return ;;
+            *) ;;
+        esac
+    else
+        echo -e "${C_YELLOW}💡 Configure and start a VPN service to enable auto-configuration${C_RESET}"
+        echo -e "\n${C_YELLOW}💡 Actions:${C_RESET}"
+        echo -e "  ${C_CHOICE}1)${C_RESET} 🔄 Manually Enable DNS Forwarding & Start SSH"
+        echo -e "  ${C_CHOICE}0)${C_RESET} ↩️ Return to Main Menu"
+        echo
+        read -p "$(echo -e ${C_PROMPT}"👉 Select an action: "${C_RESET})" action
+        case $action in
+            1)
+                echo -e "\n${C_BLUE}🔄 Manually configuring services...${C_RESET}"
+                enable_dns_forwarding
+                auto_start_ssh_on_vpn
+                sleep 2
+                ;;
+            0) return ;;
+            *) ;;
+        esac
+    fi
+}
+
 purge_nginx() {
     local mode="$1"
     if [[ "$mode" != "silent" ]]; then
@@ -3017,9 +3832,10 @@ uninstall_xui_panel() {
 show_banner() {
     local os_name=$(grep -oP 'PRETTY_NAME="\K[^"]+' /etc/os-release || echo "Linux")
     local up_time=$(uptime -p | sed 's/up //')
-    local ram_usage=$(free -m | awk '/^Mem:/{printf "%.2f", $3*100/$2}')
+    local ram_usage=$(free -m | awk '/^Mem:/{printf "%.1f", $3*100/$2}')
     local ram_total=$(free -h | awk '/^Mem:/ {print $2}')
     local cpu_cores=$(nproc)
+    local server_ip=$(hostname -I | awk '{print $1}' | head -n1)
 
     local cpu_usage
     cpu_usage=$(top -bn1 | grep -i 'cpu(s)' | awk '{print $2 + $4}' | awk '{printf "%.1f", $1}')
@@ -3027,7 +3843,7 @@ show_banner() {
     local online_users=0
     if [[ -s "$DB_FILE" ]]; then
         while IFS=: read -r user pass expiry limit; do
-           local count=$(pgrep -u "$user" sshd | wc -l)
+           local count=$(pgrep -u "$user" sshd 2>/dev/null | wc -l)
            online_users=$((online_users + count))
         done < "$DB_FILE"
     fi
@@ -3037,81 +3853,133 @@ show_banner() {
 
     clear
     echo
-    echo -e "${C_TITLE}❖ ── 🔧 ${C_BOLD}${REPO_NAME} Manager v3.4.0 (ActiveLimiter)${C_RESET}${C_TITLE} 🔧 ── ❖${C_RESET}"
+    # Modern ASCII Art Banner with Colors
+    echo -e "${C_BRIGHT_CYAN}${C_BOLD}"
+    echo -e "    ███╗   ███╗██████╗  ██████╗██╗   ██╗███████╗██████╗ ██████╗ "
+    echo -e "    ████╗ ████║██╔══██╗██╔════╝╚██╗ ██╔╝██╔════╝██╔══██╗╚════██╗"
+    echo -e "    ██╔████╔██║██████╔╝██║      ╚████╔╝ █████╗  ██████╔╝ █████╔╝"
+    echo -e "    ██║╚██╔╝██║██╔══██╗██║       ╚██╔╝  ██╔══╝  ██╔══██╗██╔═══╝ "
+    echo -e "    ██║ ╚═╝ ██║██║  ██║╚██████╗   ██║   ███████╗██║  ██║███████╗"
+    echo -e "    ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝"
+    echo -e "${C_RESET}"
+    echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ════════════════════════════════════════════════════════════════════${C_RESET}"
+    echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ✨ ${REPO_NAME} Manager ${C_BRIGHT_YELLOW}v3.4.0${C_BRIGHT_CYAN} (ActiveLimiter) ✨${C_RESET}"
+    echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ════════════════════════════════════════════════════════════════════${C_RESET}"
     echo
-    echo -e "${C_DIM}    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~${C_RESET}"
-    printf "    ${C_CYAN}%-12s${C_RESET} %-25s ${C_CYAN}%-12s${C_RESET} %s\n" "OS:" "$os_name" "Online:" "$online_users Sessions"
-    printf "    ${C_CYAN}%-12s${C_RESET} %-25s ${C_CYAN}%-12s${C_RESET} %s\n" "Uptime:" "$up_time" "Total Users:" "$total_users"
-    printf "    ${C_CYAN}%-12s${C_RESET} %-25s\n" "Resources:" "CPU(${cpu_cores}): ${cpu_usage}%% | RAM(${ram_total}): ${ram_usage}%%"
-    echo -e "${C_DIM}    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~${C_RESET}"
+    
+    # System Information Box with Better Colors
+    echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}${C_BOLD}    ┌─────────────────────────────────────────────────────────────────────┐${C_RESET}"
+    echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_BRIGHT_CYAN}${C_BOLD}  📊 System Information${C_BRIGHT_WHITE}                                         │${C_RESET}"
+    echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}    ├─────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    
+    # First row
+    printf "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_RESET}  ${C_BRIGHT_GREEN}🖥  OS:${C_RESET} ${C_WHITE}%-25s${C_RESET}  ${C_BRIGHT_YELLOW}👥 Online:${C_RESET} ${C_WHITE}%3s Sessions${C_RESET}  ${C_BG_BLACK}${C_BRIGHT_WHITE}│${C_RESET}\n" "$os_name" "$online_users"
+    
+    # Second row
+    printf "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_RESET}  ${C_BRIGHT_GREEN}⏱  Uptime:${C_RESET} ${C_WHITE}%-20s${C_RESET}  ${C_BRIGHT_YELLOW}👤 Total Users:${C_RESET} ${C_WHITE}%3s${C_RESET}        ${C_BG_BLACK}${C_BRIGHT_WHITE}│${C_RESET}\n" "$up_time" "$total_users"
+    
+    # Third row - Resources with color bars
+    local cpu_color=$C_BRIGHT_GREEN
+    local ram_color=$C_BRIGHT_GREEN
+    if (( $(echo "$cpu_usage > 80" | bc -l 2>/dev/null || echo 0) )); then cpu_color=$C_BRIGHT_RED
+    elif (( $(echo "$cpu_usage > 50" | bc -l 2>/dev/null || echo 0) )); then cpu_color=$C_BRIGHT_YELLOW; fi
+    if (( $(echo "$ram_usage > 80" | bc -l 2>/dev/null || echo 0) )); then ram_color=$C_BRIGHT_RED
+    elif (( $(echo "$ram_usage > 50" | bc -l 2>/dev/null || echo 0) )); then ram_color=$C_BRIGHT_YELLOW; fi
+    
+    printf "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_RESET}  ${C_BRIGHT_GREEN}⚡ Resources:${C_RESET} ${cpu_color}CPU(${cpu_cores}): %5s%%${C_RESET} ${C_BRIGHT_WHITE}|${C_RESET} ${ram_color}RAM(${ram_total}): %5s%%${C_RESET}    ${C_BG_BLACK}${C_BRIGHT_WHITE}│${C_RESET}\n" "$cpu_usage" "$ram_usage"
+    
+    # Server IP
+    if [[ -n "$server_ip" ]]; then
+        printf "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_RESET}  ${C_BRIGHT_GREEN}🌐 Server IP:${C_RESET} ${C_BRIGHT_CYAN}%-47s${C_RESET}  ${C_BG_BLACK}${C_BRIGHT_WHITE}│${C_RESET}\n" "$server_ip"
+    fi
+    
+    echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}    └─────────────────────────────────────────────────────────────────────┘${C_RESET}"
+    echo
 }
 
 protocol_menu() {
     while true; do
         show_banner
-        local badvpn_status; if systemctl is-active --quiet badvpn; then badvpn_status="${C_STATUS_A}(Active)${C_RESET}"; else badvpn_status="${C_STATUS_I}(Inactive)${C_RESET}"; fi
-        local udp_custom_status; if systemctl is-active --quiet udp-custom; then udp_custom_status="${C_STATUS_A}(Active)${C_RESET}"; else udp_custom_status="${C_STATUS_I}(Inactive)${C_RESET}"; fi
-        local zivpn_status; if systemctl is-active --quiet zivpn.service; then zivpn_status="${C_STATUS_A}(Active)${C_RESET}"; else zivpn_status="${C_STATUS_I}(Inactive)${C_RESET}"; fi
+        local badvpn_status; if systemctl is-active --quiet badvpn; then badvpn_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"; else badvpn_status="${C_DIM}[INACTIVE]${C_RESET}"; fi
+        local udp_custom_status; if systemctl is-active --quiet udp-custom; then udp_custom_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"; else udp_custom_status="${C_DIM}[INACTIVE]${C_RESET}"; fi
+        local zivpn_status; if systemctl is-active --quiet zivpn.service; then zivpn_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"; else zivpn_status="${C_DIM}[INACTIVE]${C_RESET}"; fi
         
         local ssl_tunnel_text="SSL Tunnel (Port 444)"
-        local ssl_tunnel_status="${C_STATUS_I}(Inactive)${C_RESET}"
+        local ssl_tunnel_status="${C_DIM}[INACTIVE]${C_RESET}"
         if systemctl is-active --quiet haproxy; then
             local active_port
             active_port=$(grep -oP 'bind \*:(\d+)' "$HAPROXY_CONFIG" 2>/dev/null | awk -F: '{print $2}')
             if [[ -n "$active_port" ]]; then
                 ssl_tunnel_text="SSL Tunnel (Port $active_port)"
             fi
-            ssl_tunnel_status="${C_STATUS_A}(Active)${C_RESET}"
+            ssl_tunnel_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"
         fi
         
         local dnstt_status
         if [ -f "$DNSTT_SERVICE_FILE" ]; then
             if systemctl is-active --quiet dnstt.service 2>/dev/null; then
                 if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                    dnstt_status="${C_STATUS_A}(Active)${C_RESET}"
+                    dnstt_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"
                 else
-                    dnstt_status="${C_STATUS_A}(Server Active)${C_RESET}"
+                    dnstt_status="${C_BRIGHT_YELLOW}${C_BOLD}[PARTIAL]${C_RESET}"
                 fi
             else
-                dnstt_status="${C_STATUS_I}(Inactive)${C_RESET}"
+                dnstt_status="${C_DIM}[INACTIVE]${C_RESET}"
             fi
         else
-            dnstt_status="${C_STATUS_I}(Inactive)${C_RESET}"
+            dnstt_status="${C_DIM}[INACTIVE]${C_RESET}"
         fi
         
-        local webproxy_status="${C_STATUS_I}(Inactive)${C_RESET}"
+        local webproxy_status="${C_DIM}[INACTIVE]${C_RESET}"
         local webproxy_ports=""
         if systemctl is-active --quiet webproxy; then
             if [ -f "$WEBPROXY_CONFIG_FILE" ]; then source "$WEBPROXY_CONFIG_FILE"; fi
-            webproxy_ports=" ($PORTS)"
-            webproxy_status="${C_STATUS_A}(Active - ${INSTALLED_VERSION:-latest})${C_RESET}"
+            webproxy_ports=" (Ports: ${PORTS:-N/A})"
+            webproxy_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"
         fi
 
-        local nginx_status; if systemctl is-active --quiet nginx; then nginx_status="${C_STATUS_A}(Active)${C_RESET}"; else nginx_status="${C_STATUS_I}(Inactive)${C_RESET}"; fi
-        local xui_status; if command -v x-ui &> /dev/null; then xui_status="${C_STATUS_A}(Installed)${C_RESET}"; else xui_status="${C_STATUS_I}(Not Installed)${C_RESET}"; fi
+        local nginx_status; if systemctl is-active --quiet nginx; then nginx_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"; else nginx_status="${C_DIM}[INACTIVE]${C_RESET}"; fi
+        local xui_status; if command -v x-ui &> /dev/null; then xui_status="${C_BRIGHT_GREEN}${C_BOLD}[INSTALLED]${C_RESET}"; else xui_status="${C_DIM}[NOT INSTALLED]${C_RESET}"; fi
         
-        echo -e "\n   ${C_TITLE}══════════════[ ${C_BOLD}🔌 PROTOCOL & PANEL MANAGEMENT ${C_RESET}${C_TITLE}]══════════════${C_RESET}"
-        echo -e "     ${C_ACCENT}--- TUNNELLING PROTOCOLS---${C_RESET}"
-        echo -e "     ${C_CHOICE}1)${C_RESET} 🚀 Install badvpn (UDP 7300) $badvpn_status"
-        echo -e "     ${C_CHOICE}2)${C_RESET} 🗑️ Uninstall badvpn"
-        echo -e "     ${C_CHOICE}3)${C_RESET} 🚀 Install udp-custom (Excl. 53,5300) $udp_custom_status"
-        echo -e "     ${C_CHOICE}4)${C_RESET} 🗑️ Uninstall udp-custom"
-        echo -e "     ${C_CHOICE}5)${C_RESET} 🔒 Install ${ssl_tunnel_text} ${ssl_tunnel_status}"
-        echo -e "     ${C_CHOICE}6)${C_RESET} 🗑️ Uninstall SSL Tunnel"
-        echo -e "     ${C_CHOICE}7)${C_RESET} 📡 Install/View DNSTT (Port 53/5300) $dnstt_status"
-        echo -e "     ${C_CHOICE}8)${C_RESET} 🗑️ Uninstall DNSTT"
-        echo -e "     ${C_CHOICE}9)${C_RESET} 🌐 Install WebSocket Proxy (Select Version) ${webproxy_ports} $webproxy_status"
-        echo -e "     ${C_CHOICE}10)${C_RESET} 🗑️ Uninstall WebSocket Proxy"
-        echo -e "     ${C_CHOICE}11)${C_RESET} 🌐 Install/Manage Nginx Proxy (80/443) $nginx_status"
-        echo -e "     ${C_CHOICE}16)${C_RESET} 🛡️ Install ZiVPN (UDP 5667 + Port Share) $zivpn_status"
-        echo -e "     ${C_CHOICE}17)${C_RESET} 🗑️ Uninstall ZiVPN"
-        echo -e "     ${C_ACCENT}--- 💻 MANAGEMENT PANELS ---${C_RESET}"
-        echo -e "     ${C_CHOICE}12)${C_RESET} 💻 Install X-UI Panel $xui_status"
-        echo -e "     ${C_CHOICE}13)${C_RESET} 🗑️ Uninstall X-UI Panel"
-        echo -e "   ${C_DIM}~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~${C_RESET}"
-        echo -e "     ${C_WARN}0)${C_RESET} ↩️ Return to Main Menu"
+        local http_custom_status="${C_DIM}[INACTIVE]${C_RESET}"
+        if systemctl is-active --quiet http-custom 2>/dev/null; then
+            http_custom_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE: Port $HTTP_CUSTOM_PORT]${C_RESET}"
+        elif [ -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
+            http_custom_status="${C_BRIGHT_YELLOW}[INSTALLED: INACTIVE]${C_RESET}"
+        fi
+        
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_BRIGHT_MAGENTA}${C_BOLD}  🔌 PROTOCOL & PANEL MANAGEMENT${C_BRIGHT_CYAN}                                        ║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}📡 TUNNELLING PROTOCOLS${C_RESET}                                                      ${C_BRIGHT_CYAN}║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                   ${C_BRIGHT_CYAN}║${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}1${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🚀 Install badvpn (UDP 7300)${C_RESET}                        ${badvpn_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}2${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall badvpn${C_RESET}                                          ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}3${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🚀 Install udp-custom (Excl. 53,5300)${C_RESET}              ${udp_custom_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}4${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall udp-custom${C_RESET}                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}5${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔒 Install ${ssl_tunnel_text}${C_RESET}                   ${ssl_tunnel_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}6${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall SSL Tunnel${C_RESET}                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}7${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}📡 Install/View DNSTT (Port 53/5300)${C_RESET}              ${dnstt_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}8${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall DNSTT${C_RESET}                                          ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}9${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🌐 Install WebSocket Proxy${webproxy_ports}${C_RESET}         ${webproxy_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}10${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall WebSocket Proxy${C_RESET}                              ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}11${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🌐 Install/Manage Nginx Proxy (80/443)${C_RESET}            ${nginx_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}14${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🌐 Install HTTP Custom (Port $HTTP_CUSTOM_PORT)${C_RESET}            ${http_custom_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}15${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall HTTP Custom${C_RESET}                                  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}16${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🛡  Install ZiVPN (UDP 5667 + Port Share)${C_RESET}          ${zivpn_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}17${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall ZiVPN${C_RESET}                                          ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                   ${C_BRIGHT_CYAN}║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}💻 MANAGEMENT PANELS${C_RESET}                                                   ${C_BRIGHT_CYAN}║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                   ${C_BRIGHT_CYAN}║${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}12${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}💻 Install X-UI Panel${C_RESET}                                 ${xui_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}13${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall X-UI Panel${C_RESET}                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}0${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_CYAN}↩️  Return to Main Menu${C_RESET}                                           ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
-        read -p "$(echo -e ${C_PROMPT}"👉 Select an option: "${C_RESET})" choice
+        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ┌─────────────────────────────────────────────────────────────────────┐${C_RESET}"
+        read -p "$(echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    │${C_RESET} ${C_BRIGHT_GREEN}👉${C_RESET} ${C_BRIGHT_CYAN}Select an option:${C_RESET} ${C_WHITE}")" choice
+        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    └─────────────────────────────────────────────────────────────────────┘${C_RESET}"
         case $choice in
             1) install_badvpn; press_enter ;; 2) uninstall_badvpn; press_enter ;;
             3) install_udp_custom; press_enter ;; 4) uninstall_udp_custom; press_enter ;;
@@ -3120,7 +3988,52 @@ protocol_menu() {
             9) install_web_proxy; press_enter ;; 10) uninstall_web_proxy; press_enter ;;
             11) nginx_proxy_menu ;;
             12) install_xui_panel; press_enter ;; 13) uninstall_xui_panel; press_enter ;;
+            14) install_http_custom; press_enter ;; 15) uninstall_http_custom; press_enter ;;
             16) install_zivpn; press_enter ;; 17) uninstall_zivpn; press_enter ;;
+            0) return ;;
+            *) invalid_option ;;
+        esac
+    done
+}
+
+network_optimization_menu() {
+    while true; do
+        clear; show_banner
+        
+        # Check iptables status
+        local iptables_status="${C_STATUS_I}(Not Configured)${C_RESET}"
+        if command -v iptables &> /dev/null && [ -f "$IPTABLES_CONFIG_FILE" ]; then
+            iptables_status="${C_STATUS_A}(Configured)${C_RESET}"
+        fi
+        
+        # Check TCP BBR status
+        local bbr_status="${C_STATUS_I}(Not Enabled)${C_RESET}"
+        local current_cc
+        current_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
+        if [[ "$current_cc" == "bbr" ]]; then
+            bbr_status="${C_STATUS_A}(Enabled - BBR Active)${C_RESET}"
+        elif [[ -n "$current_cc" ]]; then
+            bbr_status="${C_STATUS_I}(Enabled - $current_cc)${C_RESET}"
+        fi
+        
+        echo -e "\n   ${C_TITLE}══════════════[ ${C_BOLD}🔥 NETWORK OPTIMIZATION ${C_RESET}${C_TITLE}]══════════════${C_RESET}"
+        echo -e "     ${C_ACCENT}--- 🔥 IPTABLES CONFIGURATION ---${C_RESET}"
+        echo -e "     ${C_CHOICE}1)${C_RESET} 🔥 Configure iptables Rules $iptables_status"
+        echo -e "     ${C_CHOICE}2)${C_RESET} 👁️ View Current iptables Rules"
+        echo -e "     ${C_CHOICE}3)${C_RESET} 🗑️ Reset iptables Rules to Default"
+        echo -e "     ${C_ACCENT}--- 🚀 TCP BBR CONGESTION CONTROL ---${C_RESET}"
+        echo -e "     ${C_CHOICE}4)${C_RESET} 🚀 Enable TCP BBR & Network Optimizations $bbr_status"
+        echo -e "     ${C_CHOICE}5)${C_RESET} 📊 Check TCP BBR Status"
+        echo -e "   ${C_DIM}~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~${C_RESET}"
+        echo -e "     ${C_WARN}0)${C_RESET} ↩️ Return to Main Menu"
+        echo
+        read -p "$(echo -e ${C_PROMPT}"👉 Select an option: "${C_RESET})" choice
+        case $choice in
+            1) configure_iptables; press_enter ;;
+            2) view_iptables_rules; press_enter ;;
+            3) reset_iptables_rules; press_enter ;;
+            4) enable_tcp_bbr; press_enter ;;
+            5) check_tcp_bbr_status; press_enter ;;
             0) return ;;
             *) invalid_option ;;
         esac
@@ -3281,10 +4194,18 @@ uninstall_script() {
 }
 
 press_enter() {
-    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to return to the menu..." && read -r
+    echo
+    echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
+    echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_CYAN}Press ${C_BRIGHT_GREEN}${C_BOLD}[Enter]${C_RESET}${C_BRIGHT_CYAN} to return to the menu...${C_BRIGHT_YELLOW}                           ║${C_RESET}"
+    echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
+    read -r
 }
 invalid_option() {
-    echo -e "\n${C_RED}❌ Invalid option.${C_RESET}" && sleep 1
+    echo
+    echo -e "${C_BRIGHT_RED}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
+    echo -e "${C_BRIGHT_RED}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_RED}${C_BOLD}❌ Invalid option. Please try again.${C_RESET}${C_BRIGHT_RED}                              ║${C_RESET}"
+    echo -e "${C_BRIGHT_RED}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
+    sleep 1
 }
 
 main_menu() {
@@ -3293,25 +4214,41 @@ main_menu() {
         export UNINSTALL_MODE="interactive"
         show_banner
         
+        # User Management Section with Modern Box Design
+        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ║${C_BRIGHT_CYAN}${C_BOLD}  👤 USER MANAGEMENT${C_BRIGHT_MAGENTA}                                                    ║${C_RESET}"
+        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
+        printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}1${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}✨ Create New User${C_RESET}                        ${C_BRIGHT_GREEN}${C_BOLD}5${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔓 Unlock User Account${C_RESET}            ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
+        printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}2${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Delete User${C_RESET}                          ${C_BRIGHT_GREEN}${C_BOLD}6${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}📋 List All Managed Users${C_RESET}         ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
+        printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}3${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}✏️  Edit User Details${C_RESET}                     ${C_BRIGHT_GREEN}${C_BOLD}7${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔄 Renew User Account${C_RESET}            ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
+        printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}4${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔒 Lock User Account${C_RESET}                                                          ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
-        echo -e "   ${C_TITLE}═══════════════[ ${C_BOLD}👤 USER MANAGEMENT ${C_RESET}${C_TITLE}]═══════════════${C_RESET}"
-        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s ${C_CHOICE}%2s${C_RESET}) %-25s\n" "✨ 1" "Create New User" "🔓 5" "Unlock User Account"
-        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s ${C_CHOICE}%2s${C_RESET}) %-25s\n" "🗑 2" "Delete User" "📋 6" "List All Managed Users"
-        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s ${C_CHOICE}%2s${C_RESET}) %-25s\n" "✏️ 3" "Edit User Details" "🔄 7" "Renew User Account"
-        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s\n" "🔒 4" "Lock User Account"
         
+        # System Utilities Section with Modern Box Design
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_BRIGHT_MAGENTA}${C_BOLD}  ⚙️  SYSTEM UTILITIES${C_BRIGHT_CYAN}                                                    ║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}8${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔌 Install Protocols & Panels${C_RESET}              ${C_BRIGHT_GREEN}${C_BOLD}9${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}💾 Backup User Data${C_RESET}              ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}10${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}📥 Restore User Data${C_RESET}                    ${C_BRIGHT_GREEN}${C_BOLD}11${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🎨 SSH Banner Management${C_RESET}         ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}12${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🧹 Cleanup Expired Users${C_RESET}                 ${C_BRIGHT_GREEN}${C_BOLD}13${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🚀 DT Proxy Management${C_RESET}            ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}14${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}📊 VPN Status & Auto-Config${C_RESET}              ${C_BRIGHT_GREEN}${C_BOLD}15${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔥 Network Optimization${C_RESET}           ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
-        echo -e "   ${C_TITLE}═══════════════[ ${C_BOLD}⚙️ SYSTEM UTILITIES ${C_RESET}${C_TITLE}]═══════════════${C_RESET}"
-        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s ${C_CHOICE}%2s${C_RESET}) %-25s\n" "🔌 8" "Install Protocols & Panels" "💾 9" "Backup User Data"
-        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s ${C_CHOICE}%2s${C_RESET}) %-25s\n" "📥 10" "Restore User Data" "🎨 11" "SSH Banner Management"
-        printf "     ${C_CHOICE}%2s${C_RESET}) %-25s ${C_CHOICE}%2s${C_RESET}) %-25s\n" "🧹 12" "Cleanup Expired Users" "🚀 13" "DT Proxy Management"
-
+        
+        # Danger Zone Section with Red Border
+        echo -e "${C_BRIGHT_RED}${C_BOLD}${C_BLINK}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_BRIGHT_RED}${C_BOLD}    ║${C_BRIGHT_YELLOW}${C_BOLD}  ⚠️  DANGER ZONE - Use with Caution! ⚠️${C_BRIGHT_RED}                              ║${C_RESET}"
+        echo -e "${C_BRIGHT_RED}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
+        printf "${C_BRIGHT_RED}    ║${C_RESET}  ${C_BRIGHT_RED}${C_BOLD}99${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_RED}${C_BOLD}💥 Uninstall Script${C_RESET}                                    ${C_BRIGHT_GREEN}${C_BOLD}0${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_CYAN}🚪 Exit${C_RESET}              ${C_BRIGHT_RED}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_RED}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
-        echo -e "   ${C_DANGER}═══════════════════[ ${C_BOLD}🔥 DANGER ZONE ${C_RESET}${C_DANGER}]═══════════════════${C_RESET}"
-        printf "     ${C_DANGER}%2s${C_RESET}) %-28s ${C_DANGER}%2s${C_RESET}) %-25s\n" "💥 15" "Uninstall Script" "🚪 0" "Exit"
-
+        
+        # Prompt with better styling
+        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ┌─────────────────────────────────────────────────────────────────────┐${C_RESET}"
+        read -p "$(echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    │${C_RESET} ${C_BRIGHT_GREEN}👉${C_RESET} ${C_BRIGHT_CYAN}Select an option:${C_RESET} ${C_WHITE}")" choice
+        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    └─────────────────────────────────────────────────────────────────────┘${C_RESET}"
         echo
-        read -p "$(echo -e ${C_PROMPT}"👉 Select an option: "${C_RESET})" choice
         case $choice in
             1) create_user; press_enter ;;
             2) delete_user; press_enter ;;
@@ -3326,8 +4263,18 @@ main_menu() {
             11) ssh_banner_menu ;;
             12) cleanup_expired; press_enter ;;
             13) dt_proxy_menu ;;
-            15) uninstall_script ;;
-            0) echo -e "\n${C_BLUE}👋 Goodbye!${C_RESET}"; exit 0 ;;
+            14) show_vpn_status; press_enter ;;
+            15) network_optimization_menu ;;
+            99) uninstall_script ;;
+            0) 
+                echo
+                echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
+                echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}👋 Thank you for using ${REPO_NAME} Manager!${C_RESET}${C_BRIGHT_CYAN}                             ║${C_RESET}"
+                echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_YELLOW}Goodbye! See you soon! 👋${C_RESET}${C_BRIGHT_CYAN}                                               ║${C_RESET}"
+                echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
+                echo
+                exit 0 
+                ;;
             *) invalid_option ;;
         esac
     done
