@@ -1810,18 +1810,37 @@ install_dnstt() {
     fi
     chmod +x "$DNSTT_BINARY"
 
-    echo -e "${C_BLUE}🔐 Generating cryptographic keys...${C_RESET}"
+    echo -e "${C_BLUE}🔐 Setting up cryptographic keys...${C_RESET}"
     mkdir -p "$DNSTT_KEYS_DIR" || {
         echo -e "${C_RED}❌ Failed to create keys directory.${C_RESET}"
         return 1
     }
-    if ! "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub" 2>/dev/null; then
-        echo -e "${C_RED}❌ Failed to generate DNSTT keys.${C_RESET}"
-        return 1
+    
+    # Check if keys already exist - reuse them to maintain constant public key
+    if [[ -f "$DNSTT_KEYS_DIR/server.key" ]] && [[ -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
+        echo -e "${C_GREEN}✅ Using existing DNSTT keys (maintaining constant public key)${C_RESET}"
+        # Verify existing keys are valid
+        if [[ -f "$DNSTT_BINARY" ]] && "$DNSTT_BINARY" -test-keys -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub" >/dev/null 2>&1; then
+            echo -e "${C_GREEN}✅ Existing key pair verified and valid${C_RESET}"
+        else
+            echo -e "${C_YELLOW}⚠️ Existing keys found but verification failed. Keys will be regenerated...${C_RESET}"
+            rm -f "$DNSTT_KEYS_DIR/server.key" "$DNSTT_KEYS_DIR/server.pub"
+        fi
     fi
+    
+    # Generate new keys only if they don't exist or were invalid
     if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]] || [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
-        echo -e "${C_RED}❌ Key files were not created successfully.${C_RESET}"
-        return 1
+        echo -e "${C_BLUE}🔐 Generating new cryptographic keys...${C_RESET}"
+        if ! "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub" 2>/dev/null; then
+            echo -e "${C_RED}❌ Failed to generate DNSTT keys.${C_RESET}"
+            return 1
+        fi
+        if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]] || [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
+            echo -e "${C_RED}❌ Key files were not created successfully.${C_RESET}"
+            return 1
+        fi
+        echo -e "${C_GREEN}✅ New DNSTT keys generated successfully${C_RESET}"
+        echo -e "${C_YELLOW}⚠️ IMPORTANT: Save this public key - it will remain constant unless you manually delete the key files${C_RESET}"
     fi
     
     local PUBLIC_KEY
@@ -2100,6 +2119,7 @@ NoNewPrivileges=false
 WantedBy=multi-user.target
 EOF
     echo -e "\n${C_BLUE}💾 Saving configuration and starting service...${C_RESET}"
+    # Save the public key to config file (this will remain constant for this installation)
     cat > "$DNSTT_CONFIG_FILE" <<-EOF
 NS_SUBDOMAIN="$NS_SUBDOMAIN"
 TUNNEL_SUBDOMAIN="$TUNNEL_SUBDOMAIN"
@@ -2110,6 +2130,7 @@ FORWARD_DESC="$forward_desc"
 DNSTT_RECORDS_MANAGED="$DNSTT_RECORDS_MANAGED"
 HAS_IPV6="$HAS_IPV6"
 MTU_VALUE="$mtu_value"
+KEY_FILE_PATH="$DNSTT_KEYS_DIR"
 EOF
     if ! systemctl daemon-reload; then
         echo -e "${C_RED}❌ Failed to reload systemd daemon.${C_RESET}"
@@ -2207,6 +2228,9 @@ EOF
             echo -e "${C_CYAN}ℹ️ DNSTT server runs on port 5300 (internal)${C_RESET}"
             echo -e "${C_CYAN}ℹ️ EDNS proxy listens on port 53 (public) and forwards to port 5300${C_RESET}"
             echo -e "${C_CYAN}ℹ️ External EDNS size: 512, Internal EDNS size: 1800 (high speed)${C_RESET}"
+            echo -e "\n${C_YELLOW}🔑 IMPORTANT: Your public key is CONSTANT and will remain the same for VPN connections${C_RESET}"
+            echo -e "${C_YELLOW}   The key is stored at: ${C_WHITE}$DNSTT_KEYS_DIR/server.pub${C_RESET}"
+            echo -e "${C_YELLOW}   This key will be reused on reinstallations unless manually deleted${C_RESET}"
             show_dnstt_details
         elif [[ "$dnstt_started" == "true" ]]; then
             echo -e "\n${C_YELLOW}⚠️ DNSTT server is running, but EDNS proxy may need attention.${C_RESET}"
