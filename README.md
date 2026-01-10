@@ -1,6 +1,6 @@
-# 🦅 kitonga Manager v3.4.0 (ActiveLimiter)
+# 🔧 MRCYBER255-KITONGA Manager v3.4.0 (ActiveLimiter)
 
-**kitonga Manager** — A powerful and unified **proxy/VPN management script** for Linux servers.
+**MRCYBER255-KITONGA Manager** — A powerful and unified **proxy/VPN management script** for Linux servers.
 It supports multiple tunneling protocols, SSH user management with connection limits, SSL automation, and an Nginx gateway that handles all traffic efficiently.
 
 ---
@@ -21,7 +21,7 @@ After installation, simply type `menu` to start the management interface.
 > Before installation:
 >
 > * **Backup** your user data
-> * **Uninstall** any old version of FirewallFalcon Manager
+> * **Uninstall** any old version of MRCYBER255-KITONGA Manager
 > * Then perform a **clean install** using the command above
 
 ---
@@ -70,7 +70,7 @@ Easily manage and run a wide range of VPN and proxy protocols:
   - Automatic key generation
   - Custom domain support (nameserver + tunnel domain required)
 
-* **Falcon Proxy** — WebSocket and SOCKS proxy
+* **WebSocket Proxy** — WebSocket and SOCKS proxy
   - Multiple version support
   - Configurable ports (default: 8080)
   - Returns fake HTTP responses
@@ -151,8 +151,8 @@ Easily manage and run a wide range of VPN and proxy protocols:
 - `6` - Uninstall SSL Tunnel
 - `7` - Install/View DNSTT (Port 53/5300)
 - `8` - Uninstall DNSTT
-- `9` - Install Falcon Proxy (Select Version)
-- `10` - Uninstall Falcon Proxy
+- `9` - Install WebSocket Proxy (Select Version)
+- `10` - Uninstall WebSocket Proxy
 - `11` - Install/Manage Nginx Proxy (80/443)
 - `16` - Install ZiVPN (UDP 5667 + Port Share)
 - `17` - Uninstall ZiVPN
@@ -169,7 +169,7 @@ Easily manage and run a wide range of VPN and proxy protocols:
 * **Access:** Root privileges (required)
 * **Ports:** 
   - **80, 443** - Nginx (HTTP/HTTPS)
-  - **8080** - Falcon Proxy (default)
+  - **8080** - WebSocket Proxy (default)
   - **53, 5300** - DNSTT (UDP)
   - **7300** - BadVPN (UDP)
   - **5667** - ZiVPN (UDP)
@@ -210,7 +210,7 @@ DNSTT Server
 Client → Nginx (80/443)
           ├──> V2Ray/XRay backend  
           ├──> SSH WebSocket
-          └──> Falcon Proxy (WebSocket → SSH)  
+          └──> WebSocket Proxy (WebSocket → SSH)  
 
 Client → DNSTT (Port 53)
           ↓
@@ -277,11 +277,11 @@ Email: admin@example.com
 
 | File | Purpose |
 |------|---------|
-| `/etc/firewallfalcon/users.db` | User database (format: `username:password:expiry:limit`) |
-| `/etc/firewallfalcon/dnstt_info.conf` | DNSTT configuration |
-| `/etc/firewallfalcon/dnstt/server.key` | DNSTT private key (server only) |
-| `/etc/firewallfalcon/dnstt/server.pub` | DNSTT public key (for clients) |
-| `/etc/firewallfalcon/falconproxy_config.conf` | Falcon Proxy settings |
+| `/etc/mrcyber255-kitonga/users.db` | User database (format: `username:password:expiry:limit`) |
+| `/etc/mrcyber255-kitonga/dnstt_info.conf` | DNSTT configuration |
+| `/etc/mrcyber255-kitonga/dnstt/server.key` | DNSTT private key (server only) |
+| `/etc/mrcyber255-kitonga/dnstt/server.pub` | DNSTT public key (for clients) |
+| `/etc/mrcyber255-kitonga/webproxy_config.conf` | WebSocket Proxy settings |
 | `/etc/systemd/system/*.service` | Systemd service files |
 | `/usr/local/bin/dnstt-edns-proxy.py` | EDNS proxy script |
 
@@ -298,14 +298,14 @@ The script automatically installs and runs a background service that:
   - Users exceeding connection limits → Locks for 120 seconds
   - Active sessions → Terminates when limits exceeded
 
-- **Service:** `firewallfalcon-limiter.service`
-- **Location:** `/usr/local/bin/firewallfalcon-limiter.sh`
+- **Service:** `mrcyber255-kitonga-limiter.service`
+- **Location:** `/usr/local/bin/mrcyber255-kitonga-limiter.sh`
 
 ---
 
 ## 🦅 About
 
-FirewallFalcon Manager v3.4.0 (ActiveLimiter) simplifies the deployment and management of advanced tunneling setups.
+MRCYBER255-KITONGA Manager v3.4.0 (ActiveLimiter) simplifies the deployment and management of advanced tunneling setups.
 With one script, you can orchestrate multiple VPN and proxy technologies — **securely**, **efficiently**, and **flexibly**.
 
 **Key Improvements:**
@@ -323,4 +323,4 @@ With one script, you can orchestrate multiple VPN and proxy technologies — **s
 
 ---
 
-🦅 *kitonga Manager — Simple. Powerful. Unified.*
+🔧 *MRCYBER255-KITONGA Manager — Simple. Powerful. Unified.*

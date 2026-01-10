@@ -33,10 +33,10 @@ menu
 
 ```bash
 # View the configuration file
-cat /etc/firewallfalcon/dnstt_info.conf
+cat /etc/mrcyber255-kitonga/dnstt_info.conf
 
 # Or with formatting
-cat /etc/firewallfalcon/dnstt_info.conf | grep -E "TUNNEL_DOMAIN|PUBLIC_KEY|FORWARD_DESC|MTU_VALUE|NS_DOMAIN"
+cat /etc/mrcyber255-kitonga/dnstt_info.conf | grep -E "TUNNEL_DOMAIN|PUBLIC_KEY|FORWARD_DESC|MTU_VALUE|NS_DOMAIN"
 ```
 
 **Example output:**
@@ -54,7 +54,7 @@ MTU_VALUE="1800"
 
 ```bash
 # View the public key (for client configuration)
-cat /etc/firewallfalcon/dnstt/server.pub
+cat /etc/mrcyber255-kitonga/dnstt/server.pub
 ```
 
 ---
@@ -314,7 +314,7 @@ systemctl disable systemd-resolved
 | Command | Purpose |
 |---------|---------|
 | `menu` → `8` → `7` | View DNSTT details in menu |
-| `cat /etc/firewallfalcon/dnstt_info.conf` | View config file |
+| `cat /etc/mrcyber255-kitonga/dnstt_info.conf` | View config file |
 | `systemctl status dnstt.service` | Check DNSTT server status |
 | `systemctl status dnstt-edns-proxy.service` | Check EDNS proxy status |
 | `journalctl -u dnstt.service -f` | Follow DNSTT logs |

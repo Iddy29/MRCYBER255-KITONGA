@@ -1,6 +1,6 @@
 # 🔧 Manual Configuration Guide
 
-This document explains how to manually configure settings in the FirewallFalcon Manager script.
+This document explains how to manually configure settings in the MRCYBER255-KITONGA Manager script.
 
 ## 📍 Location of Configuration
 
@@ -47,7 +47,7 @@ DNS_SECONDARY="1.1.1.1"    # Secondary DNS server (Cloudflare DNS)
 
 ```bash
 DEFAULT_SSL_TUNNEL_PORT="444"       # SSL Tunnel default port
-DEFAULT_FALCON_PROXY_PORT="8080"    # Falcon Proxy default port
+DEFAULT_WEB_PROXY_PORT="8080"    # WebSocket Proxy default port
 DEFAULT_BADVPN_PORT="7300"          # BadVPN UDP port
 DEFAULT_ZIVPN_PORT="5667"           # ZiVPN UDP port
 DEFAULT_DNSTT_PUBLIC_PORT="53"      # DNSTT public port (EDNS proxy)
@@ -84,13 +84,13 @@ DEFAULT_DNSTT_MTU="1800"  # Maximum Transmission Unit
 ### Backup Settings
 
 ```bash
-DEFAULT_BACKUP_PATH="/root/firewallfalcon_users.tar.gz"
+DEFAULT_BACKUP_PATH="/root/mrcyber255-kitonga_users.tar.gz"
 ```
 
 **When to change:**
 - If you want backups stored in a different location
 - If `/root` is not accessible, use a different path
-- Example: `/home/backups/firewallfalcon_users.tar.gz`
+- Example: `/home/backups/mrcyber255-kitonga_users.tar.gz`
 
 ---
 
@@ -172,7 +172,7 @@ After modifying configuration:
 3. **To apply limiter settings:**
    ```bash
    # Restart the limiter service
-   systemctl restart firewallfalcon-limiter.service
+   systemctl restart mrcyber255-kitonga-limiter.service
    ```
 
 ---
@@ -215,11 +215,11 @@ DNS_SECONDARY="208.67.220.220"
 ```bash
 # Before
 DEFAULT_SSL_TUNNEL_PORT="444"
-DEFAULT_FALCON_PROXY_PORT="8080"
+DEFAULT_WEB_PROXY_PORT="8080"
 
 # After
 DEFAULT_SSL_TUNNEL_PORT="8443"
-DEFAULT_FALCON_PROXY_PORT="9090"
+DEFAULT_WEB_PROXY_PORT="9090"
 ```
 
 ### Example 3: Adjust Limiter Settings
@@ -254,7 +254,7 @@ A: Yes! Edit `menu.sh` on each server independently before first run.
 
 - `menu.sh` - Main script with configuration section
 - `install.sh` - Installation script (also has repository configuration)
-- `/etc/firewallfalcon/` - Runtime configuration directory (auto-created)
+- `/etc/mrcyber255-kitonga/` - Runtime configuration directory (auto-created)
 
 ---
 

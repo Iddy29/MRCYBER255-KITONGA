@@ -25,7 +25,7 @@ DNS_SECONDARY="1.1.1.1"    # Cloudflare DNS
 
 # Default Ports (you can customize these if needed)
 DEFAULT_SSL_TUNNEL_PORT="444"       # SSL Tunnel default port
-DEFAULT_FALCON_PROXY_PORT="8080"    # Falcon Proxy default port
+DEFAULT_WEB_PROXY_PORT="8080"    # WebSocket Proxy default port
 DEFAULT_BADVPN_PORT="7300"          # BadVPN UDP port
 DEFAULT_ZIVPN_PORT="5667"           # ZiVPN UDP port
 DEFAULT_DNSTT_PUBLIC_PORT="53"      # DNSTT public port (EDNS proxy)
@@ -92,9 +92,9 @@ DNSTT_EDNS_SERVICE="/etc/systemd/system/dnstt-edns-proxy.service"
 UDP_CUSTOM_DIR="/root/udp"
 UDP_CUSTOM_SERVICE_FILE="/etc/systemd/system/udp-custom.service"
 SSH_BANNER_FILE="/etc/bannerssh"
-FALCONPROXY_SERVICE_FILE="/etc/systemd/system/falconproxy.service"
-FALCONPROXY_BINARY="/usr/local/bin/falconproxy"
-FALCONPROXY_CONFIG_FILE="$DB_DIR/falconproxy_config.conf"
+WEBPROXY_SERVICE_FILE="/etc/systemd/system/webproxy.service"
+WEBPROXY_BINARY="/usr/local/bin/webproxy"
+WEBPROXY_CONFIG_FILE="$DB_DIR/webproxy_config.conf"
 LIMITER_SCRIPT="/usr/local/bin/${APP_BASE_DIR_NAME}-limiter.sh"
 LIMITER_SERVICE="/etc/systemd/system/${APP_BASE_DIR_NAME}-limiter.service"
 
@@ -825,8 +825,8 @@ restore_user_data() {
     if [ -f "$temp_dir/${APP_BASE_DIR_NAME}/dnstt_info.conf" ]; then
         cp "$temp_dir/${APP_BASE_DIR_NAME}/dnstt_info.conf" "$DB_DIR/"
     fi
-    if [ -f "$temp_dir/${APP_BASE_DIR_NAME}/falconproxy_config.conf" ]; then
-        cp "$temp_dir/${APP_BASE_DIR_NAME}/falconproxy_config.conf" "$DB_DIR/"
+    if [ -f "$temp_dir/${APP_BASE_DIR_NAME}/webproxy_config.conf" ]; then
+        cp "$temp_dir/${APP_BASE_DIR_NAME}/webproxy_config.conf" "$DB_DIR/"
     fi
     
     echo -e "${C_BLUE}⚙️ Re-synchronizing system accounts with the restored database...${C_RESET}"
@@ -1011,7 +1011,7 @@ EOF
     echo -e "\n${C_GREEN}📝 Creating systemd service file...${C_RESET}"
     cat > "$UDP_CUSTOM_SERVICE_FILE" <<EOF
 [Unit]
-Description=UDP Custom by FirewallFalcon
+Description=UDP Custom by ${REPO_NAME}
 After=network.target
 
 [Service]
@@ -1159,7 +1159,7 @@ install_ssl_tunnel() {
         echo -e "\n${C_GREEN}🔐 Generating self-signed SSL certificate...${C_RESET}"
         openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
             -keyout "$SSL_CERT_FILE" -out "$SSL_CERT_FILE" \
-            -subj "/CN=@FIREWALLFALCON" \
+            -subj "/CN=@${REPO_NAME}" \
             >/dev/null 2>&1 || { echo -e "${C_RED}❌ Failed to generate SSL certificate.${C_RESET}"; return; }
         echo -e "${C_GREEN}✅ Certificate created: ${C_YELLOW}$SSL_CERT_FILE${C_RESET}"
     fi
@@ -2297,14 +2297,14 @@ uninstall_dnstt() {
     echo -e "\n${C_GREEN}✅ DNSTT has been successfully uninstalled.${C_RESET}"
 }
 
-install_falcon_proxy() {
+install_web_proxy() {
     clear; show_banner
-    echo -e "${C_BOLD}${C_PURPLE}--- 🦅 Installing Falcon Proxy (Websockets/Socks) ---${C_RESET}"
+    echo -e "${C_BOLD}${C_PURPLE}--- 🌐 Installing WebSocket Proxy (Websockets/Socks) ---${C_RESET}"
     
-    if [ -f "$FALCONPROXY_SERVICE_FILE" ]; then
-        echo -e "\n${C_YELLOW}ℹ️ Falcon Proxy is already installed.${C_RESET}"
-        if [ -f "$FALCONPROXY_CONFIG_FILE" ]; then
-            source "$FALCONPROXY_CONFIG_FILE"
+    if [ -f "$WEBPROXY_SERVICE_FILE" ]; then
+        echo -e "\n${C_YELLOW}ℹ️ WebSocket Proxy is already installed.${C_RESET}"
+        if [ -f "$WEBPROXY_CONFIG_FILE" ]; then
+            source "$WEBPROXY_CONFIG_FILE"
             echo -e "   It is configured to run on port(s): ${C_YELLOW}$PORTS${C_RESET}"
             echo -e "   Installed Version: ${C_YELLOW}${INSTALLED_VERSION:-Unknown}${C_RESET}"
         fi
@@ -2347,8 +2347,8 @@ install_falcon_proxy() {
     done
 
     local ports
-    read -p "👉 Enter port(s) for Falcon Proxy (e.g., $DEFAULT_FALCON_PROXY_PORT or $DEFAULT_FALCON_PROXY_PORT 8888) [$DEFAULT_FALCON_PROXY_PORT]: " ports
-    ports=${ports:-$DEFAULT_FALCON_PROXY_PORT}
+    read -p "👉 Enter port(s) for WebSocket Proxy (e.g., $DEFAULT_WEB_PROXY_PORT or $DEFAULT_WEB_PROXY_PORT 8888) [$DEFAULT_WEB_PROXY_PORT]: " ports
+    ports=${ports:-$DEFAULT_WEB_PROXY_PORT}
 
     local port_array=($ports)
     for port in "${port_array[@]}"; do
@@ -2364,41 +2364,41 @@ install_falcon_proxy() {
     local arch=$(uname -m)
     local binary_name=""
     if [[ "$arch" == "x86_64" ]]; then
-        binary_name="falconproxy"
+        binary_name="webproxy"
         echo -e "${C_BLUE}ℹ️ Detected x86_64 (amd64) architecture.${C_RESET}"
     elif [[ "$arch" == "aarch64" || "$arch" == "arm64" ]]; then
-        binary_name="falconproxyarm"
+        binary_name="webproxyarm"
         echo -e "${C_BLUE}ℹ️ Detected ARM64 architecture.${C_RESET}"
     else
-        echo -e "\n${C_RED}❌ Unsupported architecture: $arch. Cannot install Falcon Proxy.${C_RESET}"
+        echo -e "\n${C_RED}❌ Unsupported architecture: $arch. Cannot install WebSocket Proxy.${C_RESET}"
         return
     fi
     
     # Construct download URL based on selected version
     local download_url="https://github.com/firewallfalcons/FirewallFalcon-Manager/releases/download/$SELECTED_VERSION/$binary_name"
 
-    echo -e "\n${C_GREEN}📥 Downloading Falcon Proxy $SELECTED_VERSION ($binary_name)...${C_RESET}"
-    if ! wget -q --show-progress -O "$FALCONPROXY_BINARY" "$download_url"; then
+    echo -e "\n${C_GREEN}📥 Downloading WebSocket Proxy $SELECTED_VERSION ($binary_name)...${C_RESET}"
+    if ! wget -q --show-progress -O "$WEBPROXY_BINARY" "$download_url"; then
         echo -e "\n${C_RED}❌ Failed to download the binary from $download_url${C_RESET}"
         echo -e "${C_YELLOW}ℹ️ Please ensure version $SELECTED_VERSION has asset '$binary_name'.${C_RESET}"
         return 1
     fi
-    if [[ ! -f "$FALCONPROXY_BINARY" ]] || [[ ! -s "$FALCONPROXY_BINARY" ]]; then
+    if [[ ! -f "$WEBPROXY_BINARY" ]] || [[ ! -s "$WEBPROXY_BINARY" ]]; then
         echo -e "\n${C_RED}❌ Downloaded file is empty or missing.${C_RESET}"
         return 1
     fi
-    chmod +x "$FALCONPROXY_BINARY"
+    chmod +x "$WEBPROXY_BINARY"
 
     echo -e "\n${C_GREEN}📝 Creating systemd service file...${C_RESET}"
-    cat > "$FALCONPROXY_SERVICE_FILE" <<EOF
+    cat > "$WEBPROXY_SERVICE_FILE" <<EOF
 [Unit]
-Description=Falcon Proxy ($SELECTED_VERSION)
+Description=WebSocket Proxy ($SELECTED_VERSION)
 After=network.target
 
 [Service]
 User=root
 Type=simple
-ExecStart="$FALCONPROXY_BINARY" -p "$ports"
+ExecStart="$WEBPROXY_BINARY" -p "$ports"
 Restart=always
 RestartSec=2s
 
@@ -2407,43 +2407,43 @@ WantedBy=default.target
 EOF
 
     echo -e "\n${C_GREEN}💾 Saving configuration...${C_RESET}"
-    cat > "$FALCONPROXY_CONFIG_FILE" <<EOF
+    cat > "$WEBPROXY_CONFIG_FILE" <<EOF
 PORTS="$ports"
 INSTALLED_VERSION="$SELECTED_VERSION"
 EOF
 
-    echo -e "\n${C_GREEN}▶️ Enabling and starting Falcon Proxy service...${C_RESET}"
+    echo -e "\n${C_GREEN}▶️ Enabling and starting WebSocket Proxy service...${C_RESET}"
     systemctl daemon-reload
-    systemctl enable falconproxy.service
-    systemctl restart falconproxy.service
+    systemctl enable webproxy.service
+    systemctl restart webproxy.service
     sleep 2
-    
-    if systemctl is-active --quiet falconproxy; then
-        echo -e "\n${C_GREEN}✅ SUCCESS: Falcon Proxy $SELECTED_VERSION is installed and active.${C_RESET}"
+
+    if systemctl is-active --quiet webproxy; then
+        echo -e "\n${C_GREEN}✅ SUCCESS: WebSocket Proxy $SELECTED_VERSION is installed and active.${C_RESET}"
         echo -e "   Listening on port(s): ${C_YELLOW}$ports${C_RESET}"
     else
-        echo -e "\n${C_RED}❌ ERROR: Falcon Proxy service failed to start.${C_RESET}"
+        echo -e "\n${C_RED}❌ ERROR: WebSocket Proxy service failed to start.${C_RESET}"
         echo -e "${C_YELLOW}ℹ️ Displaying last 15 lines of the service log for diagnostics:${C_RESET}"
-        journalctl -u falconproxy.service -n 15 --no-pager
+        journalctl -u webproxy.service -n 15 --no-pager
     fi
 }
 
-uninstall_falcon_proxy() {
-    echo -e "\n${C_BOLD}${C_PURPLE}--- 🗑️ Uninstalling Falcon Proxy ---${C_RESET}"
-    if [ ! -f "$FALCONPROXY_SERVICE_FILE" ]; then
-        echo -e "${C_YELLOW}ℹ️ Falcon Proxy is not installed, skipping.${C_RESET}"
+uninstall_web_proxy() {
+    echo -e "\n${C_BOLD}${C_PURPLE}--- 🗑️ Uninstalling WebSocket Proxy ---${C_RESET}"
+    if [ ! -f "$WEBPROXY_SERVICE_FILE" ]; then
+        echo -e "${C_YELLOW}ℹ️ WebSocket Proxy is not installed, skipping.${C_RESET}"
         return
     fi
-    echo -e "${C_GREEN}🛑 Stopping and disabling Falcon Proxy service...${C_RESET}"
-    systemctl stop falconproxy.service >/dev/null 2>&1
-    systemctl disable falconproxy.service >/dev/null 2>&1
+    echo -e "${C_GREEN}🛑 Stopping and disabling WebSocket Proxy service...${C_RESET}"
+    systemctl stop webproxy.service >/dev/null 2>&1
+    systemctl disable webproxy.service >/dev/null 2>&1
     echo -e "${C_GREEN}🗑️ Removing service file...${C_RESET}"
-    rm -f "$FALCONPROXY_SERVICE_FILE"
+    rm -f "$WEBPROXY_SERVICE_FILE"
     systemctl daemon-reload
     echo -e "${C_GREEN}🗑️ Removing binary and config files...${C_RESET}"
-    rm -f "$FALCONPROXY_BINARY"
-    rm -f "$FALCONPROXY_CONFIG_FILE"
-    echo -e "${C_GREEN}✅ Falcon Proxy has been uninstalled successfully.${C_RESET}"
+    rm -f "$WEBPROXY_BINARY"
+    rm -f "$WEBPROXY_CONFIG_FILE"
+    echo -e "${C_GREEN}✅ WebSocket Proxy has been uninstalled successfully.${C_RESET}"
 }
 
 # --- ZiVPN Installation Logic ---
@@ -2679,7 +2679,7 @@ install_nginx_proxy() {
     openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
         -keyout "$SSL_KEY" \
         -out "$SSL_CERT" \
-        -subj "/CN=firewallfalcon.proxy" >/dev/null 2>&1 || { echo -e "${C_RED}❌ Failed to generate SSL certificate.${C_RESET}"; return; }
+            -subj "/CN=${APP_BASE_DIR_NAME}.proxy" >/dev/null 2>&1 || { echo -e "${C_RED}❌ Failed to generate SSL certificate.${C_RESET}"; return; }
     echo -e "\n${C_GREEN}📝 Applying Nginx reverse proxy configuration...${C_RESET}"
     mv "$NGINX_CONFIG_FILE" "${NGINX_CONFIG_FILE}.bak" 2>/dev/null
     cat > "$NGINX_CONFIG_FILE" <<'EOF'
@@ -2737,7 +2737,7 @@ EOF
     if systemctl is-active --quiet nginx; then
         echo -e "\n${C_GREEN}✅ SUCCESS: Nginx Reverse Proxy is active on ports 80 & 443.${C_RESET}"
         echo -e "${C_YELLOW}⚠️ IMPORTANT: The '/' location is set to proxy to '127.0.0.1:8080'.${C_RESET}"
-        echo -e "   Please ensure Falcon Proxy (or another service) is running on port 8080."
+        echo -e "   Please ensure WebSocket Proxy (or another service) is running on port 8080."
     else
         echo -e "\n${C_RED}❌ ERROR: Nginx service failed to start.${C_RESET}"
         echo -e "${C_YELLOW}ℹ️ Displaying Nginx status for diagnostics:${C_RESET}"
@@ -2967,7 +2967,7 @@ show_banner() {
 
     clear
     echo
-    echo -e "${C_TITLE}❖ ── 🦅 ${C_BOLD}FirewallFalcon Manager v3.4.0 (ActiveLimiter)${C_RESET}${C_TITLE} 🦅 ── ❖${C_RESET}"
+    echo -e "${C_TITLE}❖ ── 🔧 ${C_BOLD}${REPO_NAME} Manager v3.4.0 (ActiveLimiter)${C_RESET}${C_TITLE} 🔧 ── ❖${C_RESET}"
     echo
     echo -e "${C_DIM}    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~${C_RESET}"
     printf "    ${C_CYAN}%-12s${C_RESET} %-25s ${C_CYAN}%-12s${C_RESET} %s\n" "OS:" "$os_name" "Online:" "$online_users Sessions"
@@ -3009,12 +3009,12 @@ protocol_menu() {
             dnstt_status="${C_STATUS_I}(Inactive)${C_RESET}"
         fi
         
-        local falconproxy_status="${C_STATUS_I}(Inactive)${C_RESET}"
-        local falconproxy_ports=""
-        if systemctl is-active --quiet falconproxy; then
-            if [ -f "$FALCONPROXY_CONFIG_FILE" ]; then source "$FALCONPROXY_CONFIG_FILE"; fi
-            falconproxy_ports=" ($PORTS)"
-            falconproxy_status="${C_STATUS_A}(Active - ${INSTALLED_VERSION:-latest})${C_RESET}"
+        local webproxy_status="${C_STATUS_I}(Inactive)${C_RESET}"
+        local webproxy_ports=""
+        if systemctl is-active --quiet webproxy; then
+            if [ -f "$WEBPROXY_CONFIG_FILE" ]; then source "$WEBPROXY_CONFIG_FILE"; fi
+            webproxy_ports=" ($PORTS)"
+            webproxy_status="${C_STATUS_A}(Active - ${INSTALLED_VERSION:-latest})${C_RESET}"
         fi
 
         local nginx_status; if systemctl is-active --quiet nginx; then nginx_status="${C_STATUS_A}(Active)${C_RESET}"; else nginx_status="${C_STATUS_I}(Inactive)${C_RESET}"; fi
@@ -3030,8 +3030,8 @@ protocol_menu() {
         echo -e "     ${C_CHOICE}6)${C_RESET} 🗑️ Uninstall SSL Tunnel"
         echo -e "     ${C_CHOICE}7)${C_RESET} 📡 Install/View DNSTT (Port 53/5300) $dnstt_status"
         echo -e "     ${C_CHOICE}8)${C_RESET} 🗑️ Uninstall DNSTT"
-        echo -e "     ${C_CHOICE}9)${C_RESET} 🦅 Install Falcon Proxy (Select Version) ${falconproxy_ports} $falconproxy_status"
-        echo -e "     ${C_CHOICE}10)${C_RESET} 🗑️ Uninstall Falcon Proxy"
+        echo -e "     ${C_CHOICE}9)${C_RESET} 🌐 Install WebSocket Proxy (Select Version) ${webproxy_ports} $webproxy_status"
+        echo -e "     ${C_CHOICE}10)${C_RESET} 🗑️ Uninstall WebSocket Proxy"
         echo -e "     ${C_CHOICE}11)${C_RESET} 🌐 Install/Manage Nginx Proxy (80/443) $nginx_status"
         echo -e "     ${C_CHOICE}16)${C_RESET} 🛡️ Install ZiVPN (UDP 5667 + Port Share) $zivpn_status"
         echo -e "     ${C_CHOICE}17)${C_RESET} 🗑️ Uninstall ZiVPN"
@@ -3047,7 +3047,7 @@ protocol_menu() {
             3) install_udp_custom; press_enter ;; 4) uninstall_udp_custom; press_enter ;;
             5) install_ssl_tunnel; press_enter ;; 6) uninstall_ssl_tunnel; press_enter ;;
             7) install_dnstt; press_enter ;; 8) uninstall_dnstt; press_enter ;;
-            9) install_falcon_proxy; press_enter ;; 10) uninstall_falcon_proxy; press_enter ;;
+            9) install_web_proxy; press_enter ;; 10) uninstall_web_proxy; press_enter ;;
             11) nginx_proxy_menu ;;
             12) install_xui_panel; press_enter ;; 13) uninstall_xui_panel; press_enter ;;
             16) install_zivpn; press_enter ;; 17) uninstall_zivpn; press_enter ;;
@@ -3166,7 +3166,7 @@ uninstall_script() {
     echo -e " - The main command ($(command -v menu))"
     echo -e " - All configuration and user data ($DB_DIR)"
     echo -e " - The active limiter service ($LIMITER_SERVICE)"
-    echo -e " - All installed services (badvpn, udp-custom, SSL Tunnel, Nginx, DNSTT, FalconProxy)"
+    echo -e " - All installed services (badvpn, udp-custom, SSL Tunnel, Nginx, DNSTT, WebSocket Proxy)"
     echo -e "\n${C_RED}This action is irreversible.${C_RESET}"
     echo ""
     read -p "👉 Type 'yes' to confirm and proceed with uninstallation: " confirm
@@ -3190,7 +3190,7 @@ uninstall_script() {
     uninstall_badvpn
     uninstall_udp_custom
     uninstall_ssl_tunnel
-    uninstall_falcon_proxy
+    uninstall_web_proxy
     uninstall_zivpn
     
     echo -e "\n${C_BLUE}🔄 Reloading systemd daemon...${C_RESET}"
