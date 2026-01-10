@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Repository Configuration
+REPO_NAME="MRCYBER255-KITONGA"
+REPO_OWNER="Iddy29"
+REPO_BRANCH="refs/heads/main"
+REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}"
+
 C_RESET='\033[0m'
 C_BOLD='\033[1m'
 C_DIM='\033[2m'

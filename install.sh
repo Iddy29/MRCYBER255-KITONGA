@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Repository Configuration
+REPO_NAME="MRCYBER255-KITONGA"
+REPO_OWNER="Iddy29"
+REPO_BRANCH="refs/heads/main"
+REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}"
+
 if [[ $EUID -ne 0 ]]; then
    echo "Error: This script must be run as root."
    exit 1
@@ -7,7 +13,7 @@ fi
 
 echo "Installing FirewallFalcon Manager..."
 
-MENU_URL="https://raw.githubusercontent.com/Iddy29/MRCYBER255-KITONGA/refs/heads/main/menu.sh"
+MENU_URL="${REPO_BASE_URL}/menu.sh"
 MENU_PATH="/usr/local/bin/menu"
 
 # Check if wget or curl is available
@@ -129,7 +135,7 @@ else
     echo "  2. Test with curl: curl -4 -I https://raw.githubusercontent.com"
     echo "  3. Check firewall rules"
     echo "  4. Try manual download:"
-    echo "     wget --prefer-family=IPv4 -O /usr/local/bin/menu \"$MENU_URL\""
+    echo "     wget --prefer-family=IPv4 -O /usr/local/bin/menu \"${REPO_BASE_URL}/menu.sh\""
     echo "     chmod +x /usr/local/bin/menu"
     echo "     /usr/local/bin/menu --install-setup"
     echo ""

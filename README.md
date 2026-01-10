@@ -10,7 +10,9 @@ It supports multiple tunneling protocols, SSH user management with connection li
 Run the following command to install the latest version:
 
 ```bash
-curl -L -o install.sh "https://raw.githubusercontent.com/Iddy29/MRCYBER255-KITONGA/refs/heads/main/install.sh" && chmod +x install.sh && sudo ./install.sh && rm install.sh
+# Repository: MRCYBER255-KITONGA
+REPO_BASE_URL="https://raw.githubusercontent.com/Iddy29/MRCYBER255-KITONGA/refs/heads/main"
+curl -L -o install.sh "${REPO_BASE_URL}/install.sh" && chmod +x install.sh && sudo ./install.sh && rm install.sh
 ```
 
 After installation, simply type `menu` to start the management interface.
