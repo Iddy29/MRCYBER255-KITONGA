@@ -4118,8 +4118,8 @@ show_vpn_status() {
         *) ;;
     esac
     
-    # Refresh status after actions
-    if [[ "$action" != "0" ]] && [[ "$action" != "4" ]]; then
+    # Refresh status after actions (except fix_all_services which handles its own flow)
+    if [[ "$action" != "0" ]] && [[ "$action" != "3" ]] && [[ "$action" != "4" ]]; then
         sleep 2
         show_vpn_status
     fi
