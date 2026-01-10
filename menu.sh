@@ -10,12 +10,14 @@
 # Repository Configuration (for updates and downloads)
 REPO_NAME="MRCYBER255-KITONGA"
 REPO_OWNER="Iddy29"
-REPO_BRANCH="main"
-REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}"
+REPO_BRANCH="refs/heads/main"
+# Extract branch name from refs/heads/main format for raw.githubusercontent.com URLs
+REPO_BRANCH_NAME=$(echo "$REPO_BRANCH" | sed 's|refs/heads/||')
+REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH_NAME}"
 
 # Base Directory Configuration (derived from repository name)
 # This is the main directory where all configuration files are stored
-APP_BASE_DIR_NAME=$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')  # Converts MRCYBER255-KITONGA to mrcyber255-kitonga
+APP_BASE_DIR_NAME=$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')  # Converts REPO_NAME to lowercase
 APP_BASE_DIR="/etc/${APP_BASE_DIR_NAME}"
 
 # DNS Configuration (used for DNSTT and system DNS)

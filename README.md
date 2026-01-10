@@ -10,11 +10,12 @@ It supports multiple tunneling protocols, SSH user management with connection li
 Run the following command to install the latest version:
 
 ```bash
-# Repository: MRCYBER255-KITONGA
+# Repository Configuration
 REPO_NAME="MRCYBER255-KITONGA"
 REPO_OWNER="Iddy29"
 REPO_BRANCH="refs/heads/main"
-REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}"
+REPO_BRANCH_NAME=$(echo "$REPO_BRANCH" | sed 's|refs/heads/||')
+REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH_NAME}"
 curl -L -o install.sh "${REPO_BASE_URL}/install.sh" && chmod +x install.sh && sudo ./install.sh && rm install.sh
 ```
 

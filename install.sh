@@ -3,8 +3,10 @@
 # Repository Configuration
 REPO_NAME="MRCYBER255-KITONGA"
 REPO_OWNER="Iddy29"
-REPO_BRANCH="main"
-REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}"
+REPO_BRANCH="refs/heads/main"
+# Extract branch name from refs/heads/main format for raw.githubusercontent.com URLs
+REPO_BRANCH_NAME=$(echo "$REPO_BRANCH" | sed 's|refs/heads/||')
+REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH_NAME}"
 
 if [[ $EUID -ne 0 ]]; then
    echo "Error: This script must be run as root."
