@@ -1476,8 +1476,10 @@ show_dnstt_details() {
 install_dnstt() {
     clear; show_banner
     echo -e "${C_BOLD}${C_PURPLE}--- 📡 DNSTT (DNS Tunnel) Management ---${C_RESET}"
-    if [ -f "$DNSTT_SERVICE_FILE" ]; then
-        echo -e "\n${C_YELLOW}ℹ️ DNSTT is already installed.${C_RESET}"
+    
+    # Check if DNSTT is already installed (either service file exists)
+    if [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ] || [ -f "$DNSTT_BINARY" ] || [ -f "$DNSTT_CONFIG_FILE" ]; then
+        echo -e "\n${C_YELLOW}ℹ️ DNSTT appears to be already installed.${C_RESET}"
         show_dnstt_details
         
         # Check service status
@@ -1488,19 +1490,66 @@ install_dnstt() {
         local edns_proxy_status="❌ INACTIVE"
         local dnstt_server_emoji="🔴"
         local edns_proxy_emoji="🔴"
+        local needs_start=false
         
         if systemctl is-active --quiet dnstt.service 2>/dev/null; then
             dnstt_server_status="✅ ACTIVE"
             dnstt_server_emoji="🟢"
+        elif [ -f "$DNSTT_SERVICE_FILE" ]; then
+            needs_start=true
+            dnstt_server_status="⚠️ INSTALLED BUT NOT RUNNING"
+            dnstt_server_emoji="🟡"
         fi
         
-        if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-            edns_proxy_status="✅ ACTIVE"
-            edns_proxy_emoji="🟢"
+        if [ -f "$DNSTT_EDNS_SERVICE" ]; then
+            if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                edns_proxy_status="✅ ACTIVE"
+                edns_proxy_emoji="🟢"
+            else
+                needs_start=true
+                edns_proxy_status="⚠️ INSTALLED BUT NOT RUNNING"
+                edns_proxy_emoji="🟡"
+            fi
+        else
+            edns_proxy_status="❌ NOT INSTALLED"
+            edns_proxy_emoji="🔴"
         fi
         
         echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}DNSTT Server:${C_RESET}     ${dnstt_server_emoji} ${dnstt_server_status} ${C_DIM}(port 5300)${C_RESET}"
         echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}EDNS Proxy:${C_RESET}       ${edns_proxy_emoji} ${edns_proxy_status} ${C_DIM}(port 53)${C_RESET}"
+        
+        # Offer to start services if they're installed but not running
+        if [[ "$needs_start" == "true" ]]; then
+            echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_BOLD}${C_YELLOW}  ⚠️ SERVICES INSTALLED BUT NOT RUNNING${C_RESET}"
+            echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_YELLOW}DNSTT services are installed but not active. Would you like to start them now?${C_RESET}"
+            read -p "$(echo -e ${C_PROMPT}"👉 Start DNSTT services? (y/n): "${C_RESET})" start_choice
+            if [[ "$start_choice" == "y" || "$start_choice" == "Y" ]]; then
+                echo -e "\n${C_BLUE}🚀 Starting DNSTT services...${C_RESET}"
+                if [ -f "$DNSTT_SERVICE_FILE" ] && ! systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                    systemctl start dnstt.service 2>/dev/null
+                    sleep 2
+                    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                        echo -e "${C_GREEN}✅ DNSTT server started${C_RESET}"
+                    else
+                        echo -e "${C_YELLOW}⚠️ DNSTT server failed to start. Check logs: journalctl -u dnstt.service${C_RESET}"
+                    fi
+                fi
+                if [ -f "$DNSTT_EDNS_SERVICE" ] && ! systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                    systemctl start dnstt-edns-proxy.service 2>/dev/null
+                    sleep 2
+                    if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                        echo -e "${C_GREEN}✅ DNSTT EDNS proxy started${C_RESET}"
+                    else
+                        echo -e "${C_YELLOW}⚠️ DNSTT EDNS proxy failed to start. Check logs: journalctl -u dnstt-edns-proxy.service${C_RESET}"
+                    fi
+                fi
+                # Enable DNS forwarding
+                enable_dns_forwarding
+                sleep 2
+            fi
+        fi
         
         # Check ports - improved detection
         echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
@@ -1594,24 +1643,56 @@ install_dnstt() {
             
             case $restart_choice in
                 1)
-                    echo -e "\n${C_BLUE}🔄 Restarting DNSTT services...${C_RESET}"
-                    if systemctl restart dnstt.service 2>/dev/null; then
-                        echo -e "${C_GREEN}✅ DNSTT server restarted.${C_RESET}"
+                    echo -e "\n${C_BLUE}🔄 Starting/Restarting DNSTT services...${C_RESET}"
+                    
+                    # Start/restart DNSTT server
+                    if [ -f "$DNSTT_SERVICE_FILE" ]; then
+                        if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                            systemctl restart dnstt.service 2>/dev/null
+                            echo -e "${C_BLUE}  ↻ Restarting DNSTT server...${C_RESET}"
+                        else
+                            systemctl start dnstt.service 2>/dev/null
+                            systemctl enable dnstt.service 2>/dev/null
+                            echo -e "${C_BLUE}  ▶️ Starting DNSTT server...${C_RESET}"
+                        fi
+                        sleep 2
+                        if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                            echo -e "${C_GREEN}✅ DNSTT server is now active.${C_RESET}"
+                        else
+                            echo -e "${C_RED}❌ Failed to start DNSTT server.${C_RESET}"
+                            echo -e "${C_YELLOW}  Showing last 15 lines of logs:${C_RESET}"
+                            journalctl -u dnstt.service -n 15 --no-pager
+                        fi
                     else
-                        echo -e "${C_RED}❌ Failed to restart DNSTT server.${C_RESET}"
-                        journalctl -u dnstt.service -n 10 --no-pager
+                        echo -e "${C_YELLOW}⚠️ DNSTT service file not found.${C_RESET}"
                     fi
                     
                     sleep 1
                     
+                    # Start/restart EDNS proxy
                     if [ -f "$DNSTT_EDNS_SERVICE" ]; then
-                        if systemctl restart dnstt-edns-proxy.service 2>/dev/null; then
-                            echo -e "${C_GREEN}✅ EDNS proxy restarted.${C_RESET}"
+                        if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                            systemctl restart dnstt-edns-proxy.service 2>/dev/null
+                            echo -e "${C_BLUE}  ↻ Restarting EDNS proxy...${C_RESET}"
                         else
-                            echo -e "${C_RED}❌ Failed to restart EDNS proxy.${C_RESET}"
-                            journalctl -u dnstt-edns-proxy.service -n 10 --no-pager
+                            systemctl start dnstt-edns-proxy.service 2>/dev/null
+                            systemctl enable dnstt-edns-proxy.service 2>/dev/null
+                            echo -e "${C_BLUE}  ▶️ Starting EDNS proxy...${C_RESET}"
                         fi
+                        sleep 2
+                        if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                            echo -e "${C_GREEN}✅ EDNS proxy is now active.${C_RESET}"
+                        else
+                            echo -e "${C_RED}❌ Failed to start EDNS proxy.${C_RESET}"
+                            echo -e "${C_YELLOW}  Showing last 15 lines of logs:${C_RESET}"
+                            journalctl -u dnstt-edns-proxy.service -n 15 --no-pager
+                        fi
+                    else
+                        echo -e "${C_YELLOW}⚠️ EDNS proxy service file not found.${C_RESET}"
                     fi
+                    
+                    # Enable DNS forwarding
+                    enable_dns_forwarding
                     
                     sleep 2
                     echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
@@ -2833,7 +2914,22 @@ EOF
     systemctl start http-custom.service
     sleep 2
 
-    if systemctl is-active --quiet http-custom; then
+    # Check service status with multiple methods - improved detection
+    local http_custom_started=false
+    sleep 3  # Give service time to fully start
+    
+    # Try multiple service name formats
+    if systemctl is-active --quiet http-custom.service 2>/dev/null; then
+        http_custom_started=true
+    elif systemctl is-active --quiet http-custom 2>/dev/null; then
+        http_custom_started=true
+    elif ss -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s" || netstat -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s" || lsof -i TCP:${HTTP_CUSTOM_PORT} 2>/dev/null | grep -q LISTEN; then
+        # Port is listening, service might be running but systemd doesn't recognize it
+        http_custom_started=true
+        echo -e "${C_YELLOW}⚠️ Port $HTTP_CUSTOM_PORT is listening but systemd service status unclear.${C_RESET}"
+    fi
+    
+    if [[ "$http_custom_started" == "true" ]]; then
         echo -e "\n${C_GREEN}✅ SUCCESS: HTTP Custom is installed and active on port $HTTP_CUSTOM_PORT.${C_RESET}"
         echo -e "${C_CYAN}ℹ️ HTTP Custom is now running and ready to accept connections.${C_RESET}"
         echo -e "${C_YELLOW}💡 Configure your client to connect to this server's IP on port $HTTP_CUSTOM_PORT${C_RESET}"
@@ -2843,8 +2939,38 @@ EOF
         setup_vpn_auto_config
     else
         echo -e "\n${C_RED}❌ ERROR: HTTP Custom service failed to start.${C_RESET}"
-        echo -e "${C_YELLOW}ℹ️ Displaying last 15 lines of the service log for diagnostics:${C_RESET}"
-        journalctl -u http-custom.service -n 15 --no-pager
+        echo -e "${C_YELLOW}ℹ️ Checking service status...${C_RESET}"
+        
+        # Check if service exists
+        if systemctl list-unit-files | grep -q "http-custom"; then
+            echo -e "${C_YELLOW}⚠️ Service file exists but service is not active.${C_RESET}"
+            systemctl status http-custom.service --no-pager -l 2>/dev/null || systemctl status http-custom --no-pager -l 2>/dev/null || true
+        fi
+        
+        echo -e "\n${C_YELLOW}ℹ️ Displaying last 20 lines of the service log for diagnostics:${C_RESET}"
+        journalctl -u http-custom.service -n 20 --no-pager 2>/dev/null || journalctl -u http-custom -n 20 --no-pager 2>/dev/null || echo -e "${C_RED}Unable to retrieve service logs${C_RESET}"
+        
+        # Try to start service one more time
+        echo -e "\n${C_BLUE}🔄 Attempting to restart HTTP Custom service...${C_RESET}"
+        systemctl restart http-custom.service 2>/dev/null || systemctl restart http-custom 2>/dev/null
+        sleep 3
+        if systemctl is-active --quiet http-custom.service 2>/dev/null || systemctl is-active --quiet http-custom 2>/dev/null; then
+            echo -e "${C_GREEN}✅ HTTP Custom service started successfully after restart!${C_RESET}"
+            http_custom_started=true
+        else
+            echo -e "\n${C_YELLOW}💡 Troubleshooting tips:${C_RESET}"
+            echo -e "  - Check if port $HTTP_CUSTOM_PORT is already in use: ${C_CYAN}ss -lntp | grep :$HTTP_CUSTOM_PORT${C_RESET}"
+            echo -e "  - Check if binary exists: ${C_CYAN}ls -la $HTTP_CUSTOM_BINARY${C_RESET}"
+            echo -e "  - Check binary permissions: ${C_CYAN}chmod +x $HTTP_CUSTOM_BINARY${C_RESET}"
+            echo -e "  - Try starting manually: ${C_CYAN}systemctl start http-custom.service && systemctl status http-custom.service${C_RESET}"
+            echo -e "  - Check firewall rules for port $HTTP_CUSTOM_PORT"
+            echo -e "  - View full logs: ${C_CYAN}journalctl -u http-custom.service -f${C_RESET}"
+        fi
+    fi
+    
+    # Final verification
+    if [[ "$http_custom_started" == "true" ]]; then
+        echo -e "\n${C_GREEN}✅ HTTP Custom is ready to use!${C_RESET}"
     fi
 }
 
@@ -3419,14 +3545,31 @@ show_vpn_status() {
     fi
     echo -e "  ${ssh_emoji} SSH Service: ${ssh_status} ${C_DIM}(${ssh_service_name:-"Not found"})${C_RESET}"
     
-    # DNSTT Status
+    # DNSTT Status - Improved detection
     local dnstt_status="❌ INACTIVE"
     local dnstt_emoji="🔴"
-    if systemctl is-active --quiet dnstt.service 2>/dev/null && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-        dnstt_status="✅ ACTIVE"
+    local dnstt_server_active=false
+    local dnstt_edns_active=false
+    
+    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+        dnstt_server_active=true
+    fi
+    
+    if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+        dnstt_edns_active=true
+    fi
+    
+    if [[ "$dnstt_server_active" == "true" ]] && [[ "$dnstt_edns_active" == "true" ]]; then
+        dnstt_status="✅ ACTIVE (Full)"
         dnstt_emoji="🟢"
-    elif systemctl is-active --quiet dnstt.service 2>/dev/null; then
-        dnstt_status="⚠️ PARTIAL (Server only)"
+    elif [[ "$dnstt_server_active" == "true" ]]; then
+        dnstt_status="⚠️ PARTIAL (Server active, EDNS inactive)"
+        dnstt_emoji="🟡"
+    elif [[ "$dnstt_edns_active" == "true" ]]; then
+        dnstt_status="⚠️ PARTIAL (EDNS active, Server inactive)"
+        dnstt_emoji="🟡"
+    elif [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ]; then
+        dnstt_status="⚠️ INSTALLED BUT NOT RUNNING"
         dnstt_emoji="🟡"
     fi
     echo -e "  ${dnstt_emoji} DNSTT: ${dnstt_status}"
@@ -3449,63 +3592,250 @@ show_vpn_status() {
     fi
     echo -e "  ${wg_emoji} WireGuard: ${wg_status}"
     
-    # HTTP Custom Status
+    # HTTP Custom Status - Improved detection with port check
     local http_custom_status="❌ INACTIVE"
     local http_custom_emoji="🔴"
-    if systemctl is-active --quiet http-custom 2>/dev/null; then
-        http_custom_status="✅ ACTIVE (Port $HTTP_CUSTOM_PORT)"
-        http_custom_emoji="🟢"
-    elif [ -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
-        http_custom_status="⚠️ INSTALLED BUT INACTIVE"
+    
+    # Check if service file exists first
+    if [ -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
+        # Try multiple service name formats
+        if systemctl is-active --quiet http-custom.service 2>/dev/null; then
+            http_custom_status="✅ ACTIVE (Port $HTTP_CUSTOM_PORT)"
+            http_custom_emoji="🟢"
+        elif systemctl is-active --quiet http-custom 2>/dev/null; then
+            http_custom_status="✅ ACTIVE (Port $HTTP_CUSTOM_PORT)"
+            http_custom_emoji="🟢"
+        # Check if port is listening (alternative check)
+        elif ss -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s" || netstat -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s" || lsof -i TCP:${HTTP_CUSTOM_PORT} 2>/dev/null | grep -q LISTEN; then
+            http_custom_status="✅ ACTIVE (Port $HTTP_CUSTOM_PORT - running)"
+            http_custom_emoji="🟢"
+        else
+            # Service file exists but not running
+            http_custom_status="⚠️ INSTALLED BUT NOT RUNNING"
+            http_custom_emoji="🟡"
+        fi
+    elif ss -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s" || netstat -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s"; then
+        # Port is in use but no service file (might be manually started)
+        http_custom_status="⚠️ PORT $HTTP_CUSTOM_PORT IN USE (no service)"
         http_custom_emoji="🟡"
     fi
+    
     echo -e "  ${http_custom_emoji} HTTP Custom: ${http_custom_status}"
     
-    # DNS Forwarding Status
+    # DNS Forwarding Status - Improved detection
     local dns_forward_status="❌ INACTIVE"
     local dns_forward_emoji="🔴"
-    if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null || (systemctl is-active --quiet systemd-resolved 2>/dev/null && grep -q "DNSStubListener=no" /etc/systemd/resolved.conf 2>/dev/null); then
-        dns_forward_status="✅ ACTIVE"
+    local dns_forward_details=""
+    
+    # Check DNSTT EDNS Proxy (primary DNS forwarding for DNSTT)
+    if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+        dns_forward_status="✅ ACTIVE (DNSTT EDNS)"
         dns_forward_emoji="🟢"
+        dns_forward_details="Port 53 → 5300"
+    # Check systemd-resolved DNS forwarding
+    elif systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        if grep -qE "^DNSStubListener=no" /etc/systemd/resolved.conf 2>/dev/null || grep -qE "^#DNSStubListener=no" /etc/systemd/resolved.conf 2>/dev/null; then
+            dns_forward_status="✅ ACTIVE (systemd-resolved)"
+            dns_forward_emoji="🟢"
+            dns_forward_details="systemd-resolved configured"
+        else
+            dns_forward_status="⚠️ PARTIAL (systemd-resolved active, not configured)"
+            dns_forward_emoji="🟡"
+        fi
+    # Check if port 53 is listening (indicates DNS forwarding might be active)
+    elif ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s' || netstat -lunp 2>/dev/null | grep -qE ':(53|:53)\s' || lsof -i UDP:53 2>/dev/null | grep -q LISTEN; then
+        local port53_process=$(ss -lunp 2>/dev/null | grep -E ':(53|:53)\s' | grep -oP 'pid=\K[0-9]+' | head -n1)
+        if [[ -n "$port53_process" ]]; then
+            port53_process=$(ps -p "$port53_process" -o comm= 2>/dev/null | head -n1)
+            if [[ -n "$port53_process" ]]; then
+                dns_forward_status="✅ ACTIVE (Port 53 - $port53_process)"
+                dns_forward_emoji="🟢"
+                dns_forward_details="Process: $port53_process"
+            else
+                dns_forward_status="⚠️ PORT 53 IN USE (unknown process)"
+                dns_forward_emoji="🟡"
+            fi
+        else
+            dns_forward_status="⚠️ PORT 53 IN USE"
+            dns_forward_emoji="🟡"
+        fi
     fi
-    echo -e "  ${dns_forward_emoji} DNS Forwarding: ${dns_forward_status}"
+    
+    if [[ -n "$dns_forward_details" ]]; then
+        echo -e "  ${dns_forward_emoji} DNS Forwarding: ${dns_forward_status} ${C_DIM}($dns_forward_details)${C_RESET}"
+    else
+        echo -e "  ${dns_forward_emoji} DNS Forwarding: ${dns_forward_status}"
+    fi
     
     echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
     
-    if [[ "$vpn_active" == "true" ]]; then
-        echo -e "${C_GREEN}✅ All systems are ready for VPN connections${C_RESET}"
-        echo -e "\n${C_YELLOW}💡 Actions:${C_RESET}"
-        echo -e "  ${C_CHOICE}1)${C_RESET} 🔄 Run Auto-Configuration (Enable DNS Forwarding & Start SSH)"
-        echo -e "  ${C_CHOICE}0)${C_RESET} ↩️ Return to Main Menu"
-        echo
-        read -p "$(echo -e ${C_PROMPT}"👉 Select an action: "${C_RESET})" action
-        case $action in
-            1)
-                echo -e "\n${C_BLUE}🔄 Running auto-configuration...${C_RESET}"
-                setup_vpn_auto_config
-                sleep 2
-                ;;
-            0) return ;;
-            *) ;;
-        esac
-    else
-        echo -e "${C_YELLOW}💡 Configure and start a VPN service to enable auto-configuration${C_RESET}"
-        echo -e "\n${C_YELLOW}💡 Actions:${C_RESET}"
-        echo -e "  ${C_CHOICE}1)${C_RESET} 🔄 Manually Enable DNS Forwarding & Start SSH"
-        echo -e "  ${C_CHOICE}0)${C_RESET} ↩️ Return to Main Menu"
-        echo
-        read -p "$(echo -e ${C_PROMPT}"👉 Select an action: "${C_RESET})" action
-        case $action in
-            1)
-                echo -e "\n${C_BLUE}🔄 Manually configuring services...${C_RESET}"
-                enable_dns_forwarding
-                auto_start_ssh_on_vpn
-                sleep 2
-                ;;
-            0) return ;;
-            *) ;;
-        esac
+    # Service Management Actions
+    echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_YELLOW}  🔧 SERVICE MANAGEMENT ACTIONS${C_RESET}"
+    echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    
+    # Check for installed but inactive services and offer to start them
+    local has_inactive_services=false
+    
+    if [[ "$dnstt_emoji" == "🟡" ]] || [[ "$dnstt_emoji" == "🔴" ]]; then
+        if [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ]; then
+            has_inactive_services=true
+            echo -e "  ${C_YELLOW}⚠️${C_RESET} DNSTT is installed but not fully active"
+            if ! systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                echo -e "    ${C_YELLOW}💡${C_RESET} DNSTT server service is not running. Would you like to start it?"
+            fi
+            if [ -f "$DNSTT_EDNS_SERVICE" ] && ! systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                echo -e "    ${C_YELLOW}💡${C_RESET} DNSTT EDNS proxy service is not running. Would you like to start it?"
+            fi
+        fi
     fi
+    
+    if [[ "$http_custom_emoji" == "🟡" ]] || [[ "$http_custom_emoji" == "🔴" ]]; then
+        if [ -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
+            has_inactive_services=true
+            echo -e "  ${C_YELLOW}⚠️${C_RESET} HTTP Custom is installed but not active"
+            echo -e "    ${C_YELLOW}💡${C_RESET} HTTP Custom service is not running. Would you like to start it?"
+        fi
+    fi
+    
+    if [[ "$dns_forward_emoji" == "🔴" ]] || [[ "$dns_forward_emoji" == "🟡" ]]; then
+        has_inactive_services=true
+        echo -e "  ${C_YELLOW}⚠️${C_RESET} DNS Forwarding is not active or partially configured"
+        echo -e "    ${C_YELLOW}💡${C_RESET} Would you like to enable DNS forwarding?"
+    fi
+    
+    if [[ "$vpn_active" == "true" ]]; then
+        echo -e "\n  ${C_GREEN}✅ All systems are ready for VPN connections${C_RESET}"
+    else
+        echo -e "\n  ${C_YELLOW}💡 Configure and start a VPN service to enable auto-configuration${C_RESET}"
+    fi
+    
+    echo -e "\n${C_YELLOW}💡 Actions:${C_RESET}"
+    echo -e "  ${C_CHOICE}1)${C_RESET} 🔄 Run Auto-Configuration (Enable DNS Forwarding & Start SSH)"
+    if [[ "$has_inactive_services" == "true" ]]; then
+        echo -e "  ${C_CHOICE}2)${C_RESET} 🚀 Start All Installed But Inactive Services (DNSTT, HTTP Custom, etc.)"
+    fi
+    echo -e "  ${C_CHOICE}3)${C_RESET} 🔍 Show Detailed Service Diagnostics"
+    echo -e "  ${C_CHOICE}0)${C_RESET} ↩️ Return to Main Menu"
+    echo
+    read -p "$(echo -e ${C_PROMPT}"👉 Select an action: "${C_RESET})" action
+    case $action in
+        1)
+            echo -e "\n${C_BLUE}🔄 Running auto-configuration...${C_RESET}"
+            setup_vpn_auto_config
+            sleep 2
+            ;;
+        2)
+            if [[ "$has_inactive_services" == "true" ]]; then
+                echo -e "\n${C_BLUE}🚀 Starting installed but inactive services...${C_RESET}"
+                # Start DNSTT services if installed
+                if [ -f "$DNSTT_SERVICE_FILE" ] && ! systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                    echo -e "${C_BLUE}▶️ Starting DNSTT server...${C_RESET}"
+                    systemctl start dnstt.service 2>/dev/null
+                    sleep 2
+                    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                        echo -e "${C_GREEN}✅ DNSTT server started${C_RESET}"
+                    else
+                        echo -e "${C_YELLOW}⚠️ DNSTT server failed to start. Check logs: journalctl -u dnstt.service${C_RESET}"
+                    fi
+                fi
+                if [ -f "$DNSTT_EDNS_SERVICE" ] && ! systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                    echo -e "${C_BLUE}▶️ Starting DNSTT EDNS proxy...${C_RESET}"
+                    systemctl start dnstt-edns-proxy.service 2>/dev/null
+                    sleep 2
+                    if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                        echo -e "${C_GREEN}✅ DNSTT EDNS proxy started${C_RESET}"
+                    else
+                        echo -e "${C_YELLOW}⚠️ DNSTT EDNS proxy failed to start. Check logs: journalctl -u dnstt-edns-proxy.service${C_RESET}"
+                    fi
+                fi
+                # Start HTTP Custom if installed
+                if [ -f "$HTTP_CUSTOM_SERVICE_FILE" ] && ! systemctl is-active --quiet http-custom.service 2>/dev/null && ! systemctl is-active --quiet http-custom 2>/dev/null; then
+                    echo -e "${C_BLUE}▶️ Starting HTTP Custom...${C_RESET}"
+                    systemctl start http-custom.service 2>/dev/null || systemctl start http-custom 2>/dev/null
+                    sleep 2
+                    if systemctl is-active --quiet http-custom.service 2>/dev/null || systemctl is-active --quiet http-custom 2>/dev/null; then
+                        echo -e "${C_GREEN}✅ HTTP Custom started${C_RESET}"
+                    else
+                        echo -e "${C_YELLOW}⚠️ HTTP Custom failed to start. Check logs: journalctl -u http-custom.service${C_RESET}"
+                    fi
+                fi
+                # Enable DNS forwarding
+                enable_dns_forwarding
+                sleep 2
+            fi
+            ;;
+        3)
+            echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_BOLD}${C_CYAN}  🔍 DETAILED SERVICE DIAGNOSTICS${C_RESET}"
+            echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            
+            # DNSTT Diagnostics
+            if [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ]; then
+                echo -e "\n${C_YELLOW}📡 DNSTT Diagnostics:${C_RESET}"
+                echo -e "  Service Files:"
+                [ -f "$DNSTT_SERVICE_FILE" ] && echo -e "    ${C_GREEN}✅${C_RESET} DNSTT service file: $DNSTT_SERVICE_FILE" || echo -e "    ${C_RED}❌${C_RESET} DNSTT service file: NOT FOUND"
+                [ -f "$DNSTT_EDNS_SERVICE" ] && echo -e "    ${C_GREEN}✅${C_RESET} EDNS proxy service file: $DNSTT_EDNS_SERVICE" || echo -e "    ${C_RED}❌${C_RESET} EDNS proxy service file: NOT FOUND"
+                echo -e "  Service Status:"
+                systemctl status dnstt.service --no-pager -l 2>/dev/null | head -n 10 || echo -e "    ${C_RED}❌${C_RESET} DNSTT service status unavailable"
+                if [ -f "$DNSTT_EDNS_SERVICE" ]; then
+                    systemctl status dnstt-edns-proxy.service --no-pager -l 2>/dev/null | head -n 10 || echo -e "    ${C_RED}❌${C_RESET} EDNS proxy service status unavailable"
+                fi
+                echo -e "  Port Status:"
+                if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+                    echo -e "    ${C_GREEN}✅${C_RESET} Port 53 (UDP) is listening"
+                    ss -lunp 2>/dev/null | grep -E ':(53|:53)\s'
+                else
+                    echo -e "    ${C_RED}❌${C_RESET} Port 53 (UDP) is NOT listening"
+                fi
+                if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+                    echo -e "    ${C_GREEN}✅${C_RESET} Port 5300 (UDP) is listening"
+                    ss -lunp 2>/dev/null | grep -E ':(5300|:5300)\s'
+                else
+                    echo -e "    ${C_RED}❌${C_RESET} Port 5300 (UDP) is NOT listening"
+                fi
+            fi
+            
+            # HTTP Custom Diagnostics
+            if [ -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
+                echo -e "\n${C_YELLOW}🌐 HTTP Custom Diagnostics:${C_RESET}"
+                echo -e "  Service File: ${C_GREEN}✅${C_RESET} $HTTP_CUSTOM_SERVICE_FILE"
+                echo -e "  Service Status:"
+                systemctl status http-custom.service --no-pager -l 2>/dev/null | head -n 10 || systemctl status http-custom --no-pager -l 2>/dev/null | head -n 10 || echo -e "    ${C_RED}❌${C_RESET} HTTP Custom service status unavailable"
+                echo -e "  Port Status:"
+                if ss -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s"; then
+                    echo -e "    ${C_GREEN}✅${C_RESET} Port $HTTP_CUSTOM_PORT (TCP) is listening"
+                    ss -lntp 2>/dev/null | grep -E ":${HTTP_CUSTOM_PORT}\s"
+                else
+                    echo -e "    ${C_RED}❌${C_RESET} Port $HTTP_CUSTOM_PORT (TCP) is NOT listening"
+                fi
+            fi
+            
+            # DNS Forwarding Diagnostics
+            echo -e "\n${C_YELLOW}🔍 DNS Forwarding Diagnostics:${C_RESET}"
+            echo -e "  systemd-resolved:"
+            if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+                echo -e "    ${C_GREEN}✅${C_RESET} systemd-resolved is active"
+                if grep -qE "^DNSStubListener=no" /etc/systemd/resolved.conf 2>/dev/null; then
+                    echo -e "    ${C_GREEN}✅${C_RESET} DNSStubListener=no is configured"
+                else
+                    echo -e "    ${C_YELLOW}⚠️${C_RESET} DNSStubListener=no is NOT configured"
+                fi
+            else
+                echo -e "    ${C_RED}❌${C_RESET} systemd-resolved is not active"
+            fi
+            echo -e "  /etc/resolv.conf:"
+            if [ -f /etc/resolv.conf ]; then
+                cat /etc/resolv.conf | head -n 5 | sed 's/^/    /'
+            else
+                echo -e "    ${C_RED}❌${C_RESET} /etc/resolv.conf not found"
+            fi
+            
+            press_enter
+            ;;
+        0) return ;;
+        *) ;;
+    esac
 }
 
 purge_nginx() {
@@ -3920,18 +4250,30 @@ protocol_menu() {
         fi
         
         local dnstt_status
-        if [ -f "$DNSTT_SERVICE_FILE" ]; then
+        if [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ]; then
+            # DNSTT is installed - check service status
+            local dnstt_server_active=false
+            local dnstt_edns_active=false
+            
             if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                    dnstt_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"
-                else
-                    dnstt_status="${C_BRIGHT_YELLOW}${C_BOLD}[PARTIAL]${C_RESET}"
-                fi
+                dnstt_server_active=true
+            fi
+            
+            if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                dnstt_edns_active=true
+            fi
+            
+            if [[ "$dnstt_server_active" == "true" ]] && [[ "$dnstt_edns_active" == "true" ]]; then
+                dnstt_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"
+            elif [[ "$dnstt_server_active" == "true" ]]; then
+                dnstt_status="${C_BRIGHT_YELLOW}${C_BOLD}[PARTIAL: Server only]${C_RESET}"
+            elif [[ "$dnstt_edns_active" == "true" ]]; then
+                dnstt_status="${C_BRIGHT_YELLOW}${C_BOLD}[PARTIAL: EDNS only]${C_RESET}"
             else
-                dnstt_status="${C_DIM}[INACTIVE]${C_RESET}"
+                dnstt_status="${C_BRIGHT_YELLOW}[INSTALLED: NOT RUNNING]${C_RESET}"
             fi
         else
-            dnstt_status="${C_DIM}[INACTIVE]${C_RESET}"
+            dnstt_status="${C_DIM}[NOT INSTALLED]${C_RESET}"
         fi
         
         local webproxy_status="${C_DIM}[INACTIVE]${C_RESET}"
@@ -3945,11 +4287,16 @@ protocol_menu() {
         local nginx_status; if systemctl is-active --quiet nginx; then nginx_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"; else nginx_status="${C_DIM}[INACTIVE]${C_RESET}"; fi
         local xui_status; if command -v x-ui &> /dev/null; then xui_status="${C_BRIGHT_GREEN}${C_BOLD}[INSTALLED]${C_RESET}"; else xui_status="${C_DIM}[NOT INSTALLED]${C_RESET}"; fi
         
-        local http_custom_status="${C_DIM}[INACTIVE]${C_RESET}"
-        if systemctl is-active --quiet http-custom 2>/dev/null; then
-            http_custom_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE: Port $HTTP_CUSTOM_PORT]${C_RESET}"
-        elif [ -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
-            http_custom_status="${C_BRIGHT_YELLOW}[INSTALLED: INACTIVE]${C_RESET}"
+        local http_custom_status="${C_DIM}[NOT INSTALLED]${C_RESET}"
+        if [ -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
+            # HTTP Custom is installed - check service status
+            if systemctl is-active --quiet http-custom.service 2>/dev/null || systemctl is-active --quiet http-custom 2>/dev/null; then
+                http_custom_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE: Port $HTTP_CUSTOM_PORT]${C_RESET}"
+            elif ss -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s" || netstat -lntp 2>/dev/null | grep -qE ":${HTTP_CUSTOM_PORT}\s"; then
+                http_custom_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE: Port $HTTP_CUSTOM_PORT]${C_RESET}"
+            else
+                http_custom_status="${C_BRIGHT_YELLOW}[INSTALLED: NOT RUNNING]${C_RESET}"
+            fi
         fi
         
         echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
