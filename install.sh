@@ -3,7 +3,7 @@
 # Repository Configuration
 REPO_NAME="MRCYBER255-KITONGA"
 REPO_OWNER="Iddy29"
-REPO_BRANCH="refs/heads/main"
+REPO_BRANCH="main"
 REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}"
 
 if [[ $EUID -ne 0 ]]; then
