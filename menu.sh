@@ -91,7 +91,7 @@ DNSTT_EDNS_PROXY="/usr/local/bin/dnstt-edns-proxy.py"
 DNSTT_EDNS_SERVICE="/etc/systemd/system/dnstt-edns-proxy.service"
 UDP_CUSTOM_DIR="/root/udp"
 UDP_CUSTOM_SERVICE_FILE="/etc/systemd/system/udp-custom.service"
-SSH_BANNER_FILE="/etc/bannerssh"
+SSH_BANNER_FILE="$APP_BASE_DIR/bannerssh"
 WEBPROXY_SERVICE_FILE="/etc/systemd/system/webproxy.service"
 WEBPROXY_BINARY="/usr/local/bin/webproxy"
 WEBPROXY_CONFIG_FILE="$DB_DIR/webproxy_config.conf"
@@ -414,6 +414,7 @@ initial_setup() {
         exit 1
     }
     mkdir -p "$SSL_CERT_DIR" 2>/dev/null
+    mkdir -p "$(dirname "$SSH_BANNER_FILE")" 2>/dev/null
     setup_limiter_service
     if [ ! -f "$INSTALL_FLAG_FILE" ]; then
         touch "$INSTALL_FLAG_FILE" 2>/dev/null

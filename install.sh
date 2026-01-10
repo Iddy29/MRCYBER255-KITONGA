@@ -11,7 +11,7 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-echo "Installing MRCYBER255-KITONGA Manager..."
+echo "Installing ${REPO_NAME} Manager..."
 
 MENU_URL="${REPO_BASE_URL}/menu.sh"
 MENU_PATH="/usr/local/bin/menu"
