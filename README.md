@@ -11,7 +11,10 @@ Run the following command to install the latest version:
 
 ```bash
 # Repository: MRCYBER255-KITONGA
-REPO_BASE_URL="https://raw.githubusercontent.com/Iddy29/MRCYBER255-KITONGA/refs/heads/main"
+REPO_NAME="MRCYBER255-KITONGA"
+REPO_OWNER="Iddy29"
+REPO_BRANCH="refs/heads/main"
+REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}"
 curl -L -o install.sh "${REPO_BASE_URL}/install.sh" && chmod +x install.sh && sudo ./install.sh && rm install.sh
 ```
 
