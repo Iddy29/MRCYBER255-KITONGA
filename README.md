@@ -1,6 +1,6 @@
-# 🦅 FirewallFalcon Manager v3.4.0 (ActiveLimiter)
+# 🦅 kitonga Manager v3.4.0 (ActiveLimiter)
 
-**FirewallFalcon Manager** — A powerful and unified **proxy/VPN management script** for Linux servers.
+**kitonga Manager** — A powerful and unified **proxy/VPN management script** for Linux servers.
 It supports multiple tunneling protocols, SSH user management with connection limits, SSL automation, and an Nginx gateway that handles all traffic efficiently.
 
 ---
@@ -315,9 +315,8 @@ With one script, you can orchestrate multiple VPN and proxy technologies — **s
 
 ## 🌐 Connect with Us
 
-📣 **Telegram Channel:** [t.me/FirewallFalcons](https://t.me/FirewallFalcons)  
-💻 **GitHub:** [github.com/FirewallFalcons](https://github.com/FirewallFalcons)
+📣 **Telegram Channel
 
 ---
 
-🦅 *FirewallFalcon Manager — Simple. Powerful. Unified.*
+🦅 *kitonga Manager — Simple. Powerful. Unified.*
