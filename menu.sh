@@ -1406,15 +1406,28 @@ show_dnstt_details() {
         echo -e "     ${C_DIM}•${C_RESET} External: ${C_YELLOW}512 bytes${C_RESET} ${C_DIM}(shown to DNS resolvers)${C_RESET}"
         echo -e "     ${C_DIM}•${C_RESET} Internal: ${C_YELLOW}1800 bytes${C_RESET} ${C_DIM}(high-speed tunnel)${C_RESET}"
         
+        echo -e "\n${C_BOLD}${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "${C_BOLD}${C_RED}  ⚠️ CRITICAL: CLIENT DNS CONFIGURATION${C_RESET}"
+        echo -e "${C_BOLD}${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        if [[ -n "$NS_DOMAIN" ]]; then
+            echo -e "  ${C_RED}❌ DO NOT USE: 8.8.8.8 or any public DNS${C_RESET}"
+            echo -e "  ${C_GREEN}✅ USE INSTEAD: ${C_YELLOW}$NS_DOMAIN${C_RESET} ${C_DIM}(or its IP address)${C_RESET}"
+            echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}The nameserver domain ($NS_DOMAIN) must point to this server's IP address${C_RESET}"
+            echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Configure your client DNS to use: ${C_YELLOW}$NS_DOMAIN${C_RESET} ${C_WHITE}or its IP${C_RESET}"
+        else
+            echo -e "  ${C_RED}❌ DO NOT USE: 8.8.8.8 or any public DNS${C_RESET}"
+            echo -e "  ${C_YELLOW}⚠️${C_RESET} ${C_WHITE}Nameserver domain not configured. Please reconfigure DNSTT.${C_RESET}"
+        fi
+        
         if [[ "$FORWARD_DESC" == *"V2Ray"* ]]; then
             echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
             echo -e "${C_BOLD}${C_YELLOW}  ⚠️ ACTION REQUIRED${C_RESET}"
-            echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
             echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Ensure a V2Ray service (VLESS/VMESS/Trojan) is listening on port $DEFAULT_V2RAY_PORT (no TLS)${C_RESET}"
         elif [[ "$FORWARD_DESC" == *"SSH"* ]]; then
             echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
             echo -e "${C_BOLD}${C_YELLOW}  ⚠️ ACTION REQUIRED${C_RESET}"
-            echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
             echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Configure your SSH client to use the DNS tunnel${C_RESET}"
         fi
         
@@ -2231,6 +2244,36 @@ EOF
             echo -e "\n${C_YELLOW}🔑 IMPORTANT: Your public key is CONSTANT and will remain the same for VPN connections${C_RESET}"
             echo -e "${C_YELLOW}   The key is stored at: ${C_WHITE}$DNSTT_KEYS_DIR/server.pub${C_RESET}"
             echo -e "${C_YELLOW}   This key will be reused on reinstallations unless manually deleted${C_RESET}"
+            
+            # Get server IP address for DNS configuration
+            local server_ip=""
+            if command -v hostname &> /dev/null; then
+                server_ip=$(hostname -I | awk '{print $1}' 2>/dev/null || hostname -i 2>/dev/null | awk '{print $1}')
+            fi
+            if [[ -z "$server_ip" ]] && command -v ip &> /dev/null; then
+                server_ip=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+' | head -n1)
+            fi
+            if [[ -z "$server_ip" ]] && command -v ifconfig &> /dev/null; then
+                server_ip=$(ifconfig 2>/dev/null | grep -oP 'inet \K[0-9.]+' | grep -v '127.0.0.1' | head -n1)
+            fi
+            
+            echo -e "\n${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_RED}  ⚠️ CRITICAL DNS CONFIGURATION FOR CLIENT${C_RESET}"
+            echo -e "${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            if [[ -n "$NS_DOMAIN" ]]; then
+                echo -e "  ${C_RED}❌ WRONG: Do NOT use DNS 8.8.8.8 or any public DNS${C_RESET}"
+                echo -e "  ${C_GREEN}✅ CORRECT: Client must use DNS: ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+                if [[ -n "$server_ip" ]]; then
+                    echo -e "  ${C_GREEN}✅ Or use IP address: ${C_YELLOW}$server_ip${C_RESET} ${C_DIM}(if nameserver domain points to this IP)${C_RESET}"
+                fi
+                echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Ensure $NS_DOMAIN resolves to this server's IP address: ${C_YELLOW}${server_ip:-"<detect-server-ip>"}${C_RESET}"
+                echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Configure client DNS to: ${C_YELLOW}$NS_DOMAIN${C_RESET} ${C_WHITE}or ${C_YELLOW}${server_ip:-"<server-ip>"}${C_RESET}"
+            else
+                echo -e "  ${C_RED}❌ WRONG: Do NOT use DNS 8.8.8.8 or any public DNS${C_RESET}"
+                echo -e "  ${C_YELLOW}⚠️${C_RESET} ${C_WHITE}Nameserver domain not configured. Please reconfigure DNSTT with nameserver domain.${C_RESET}"
+            fi
+            echo -e "${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            
             show_dnstt_details
         elif [[ "$dnstt_started" == "true" ]]; then
             echo -e "\n${C_YELLOW}⚠️ DNSTT server is running, but EDNS proxy may need attention.${C_RESET}"
