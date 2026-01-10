@@ -1,10 +1,52 @@
 #!/bin/bash
 
-# Repository Configuration
+# =============================================================================
+# 🔧 MANUAL CONFIGURATION SECTION
+# =============================================================================
+# You can manually customize these settings below to fit your environment.
+# Edit the values as needed before running the script.
+# =============================================================================
+
+# Repository Configuration (for updates and downloads)
 REPO_NAME="MRCYBER255-KITONGA"
 REPO_OWNER="Iddy29"
 REPO_BRANCH="refs/heads/main"
 REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}"
+
+# DNS Configuration (used for DNSTT and system DNS)
+# You can change these to your preferred DNS servers
+DNS_PRIMARY="8.8.8.8"      # Google DNS
+DNS_SECONDARY="1.1.1.1"    # Cloudflare DNS
+
+# Default Ports (you can customize these if needed)
+DEFAULT_SSL_TUNNEL_PORT="444"       # SSL Tunnel default port
+DEFAULT_FALCON_PROXY_PORT="8080"    # Falcon Proxy default port
+DEFAULT_BADVPN_PORT="7300"          # BadVPN UDP port
+DEFAULT_ZIVPN_PORT="5667"           # ZiVPN UDP port
+DEFAULT_DNSTT_PUBLIC_PORT="53"      # DNSTT public port (EDNS proxy)
+DEFAULT_DNSTT_INTERNAL_PORT="5300"  # DNSTT internal port (server)
+
+# Default DNSTT MTU (Maximum Transmission Unit)
+# Options: 512, 1200, 1800 (recommended for high speed)
+DEFAULT_DNSTT_MTU="1800"
+
+# Default V2Ray/XRay Port (for DNSTT forwarding option)
+DEFAULT_V2RAY_PORT="8787"
+
+# Default Backup Location
+DEFAULT_BACKUP_PATH="/root/firewallfalcon_users.tar.gz"
+
+# Timeout Settings (in seconds)
+CERTBOT_TIMEOUT="120"      # Certbot SSL certificate request timeout
+DOWNLOAD_TIMEOUT="60"      # File download timeout
+
+# Connection Limiter Settings
+LIMITER_CHECK_INTERVAL="3"          # Check interval in seconds
+LIMITER_LOCK_DURATION="120"         # Lock duration in seconds when limit exceeded
+
+# =============================================================================
+# END OF MANUAL CONFIGURATION SECTION
+# =============================================================================
 
 C_RESET='\033[0m'
 C_BOLD='\033[1m'
@@ -271,10 +313,12 @@ check_and_free_ports() {
 }
 
 setup_limiter_service() {
-    # Updated logic: No logging, smart 120s lockout
-    cat > "$LIMITER_SCRIPT" << 'EOF'
+    # Updated logic: No logging, smart configurable lockout
+    cat > "$LIMITER_SCRIPT" << EOF
 #!/bin/bash
 DB_FILE="/etc/firewallfalcon/users.db"
+LIMITER_CHECK_INTERVAL="$LIMITER_CHECK_INTERVAL"
+LIMITER_LOCK_DURATION="$LIMITER_LOCK_DURATION"
 
 # Loop continuously
 while true; do
@@ -314,9 +358,9 @@ while true; do
                 # 2. Kill their connections
                 killall -u "$user" -9 &>/dev/null
                 
-                # 3. Spawn a background process to unlock them after 120 seconds
+                # 3. Spawn a background process to unlock them after lock duration
                 # This ensures the main loop keeps running for other users
-                (sleep 120; usermod -U "$user" &>/dev/null) & 
+                (sleep $LIMITER_LOCK_DURATION; usermod -U "$user" &>/dev/null) & 
             else
                 # User is ALREADY locked.
                 # Just kill the connections to enforce the lock.
@@ -325,7 +369,7 @@ while true; do
             fi
         fi
     done < "$DB_FILE"
-    sleep 3
+    sleep $LIMITER_CHECK_INTERVAL
 done
 EOF
     chmod +x "$LIMITER_SCRIPT"
@@ -718,8 +762,8 @@ cleanup_expired() {
 backup_user_data() {
     clear; show_banner
     echo -e "${C_BOLD}${C_PURPLE}--- 💾 Backup User Data ---${C_RESET}"
-    read -p "👉 Enter path for backup file [/root/firewallfalcon_users.tar.gz]: " backup_path
-    backup_path=${backup_path:-/root/firewallfalcon_users.tar.gz}
+    read -p "👉 Enter path for backup file [$DEFAULT_BACKUP_PATH]: " backup_path
+    backup_path=${backup_path:-$DEFAULT_BACKUP_PATH}
     if [ ! -d "$DB_DIR" ] || [ ! -s "$DB_FILE" ]; then
         echo -e "\n${C_YELLOW}ℹ️ No user data found to back up.${C_RESET}"
         return
@@ -736,8 +780,8 @@ backup_user_data() {
 restore_user_data() {
     clear; show_banner
     echo -e "${C_BOLD}${C_PURPLE}--- 📥 Restore User Data ---${C_RESET}"
-    read -p "👉 Enter the full path to the user data backup file [/root/firewallfalcon_users.tar.gz]: " backup_path
-    backup_path=${backup_path:-/root/firewallfalcon_users.tar.gz}
+    read -p "👉 Enter the full path to the user data backup file [$DEFAULT_BACKUP_PATH]: " backup_path
+    backup_path=${backup_path:-$DEFAULT_BACKUP_PATH}
     if [ ! -f "$backup_path" ]; then
         echo -e "\n${C_RED}❌ ERROR: Backup file not found at '$backup_path'.${C_RESET}"
         return
@@ -1016,7 +1060,7 @@ install_badvpn() {
         echo -e "\n${C_YELLOW}ℹ️ badvpn is already installed.${C_RESET}"
         return
     fi
-    check_and_open_firewall_port 7300 udp || return
+    check_and_open_firewall_port $DEFAULT_BADVPN_PORT udp || return
     echo -e "\n${C_GREEN}🔄 Updating package lists...${C_RESET}"
     apt-get update
     echo -e "\n${C_GREEN}📦 Installing all required packages...${C_RESET}"
@@ -1043,7 +1087,7 @@ install_badvpn() {
 Description=BadVPN UDP Gateway
 After=network.target
 [Service]
-ExecStart="$badvpn_binary" --listen-addr 0.0.0.0:7300 --max-clients 1000 --max-connections-for-client 8
+ExecStart="$badvpn_binary" --listen-addr 0.0.0.0:$DEFAULT_BADVPN_PORT --max-clients 1000 --max-connections-for-client 8
 User=root
 Restart=always
 RestartSec=3
@@ -1056,7 +1100,7 @@ EOF
     systemctl start badvpn.service
     sleep 2
     if systemctl is-active --quiet badvpn; then
-        echo -e "\n${C_GREEN}✅ SUCCESS: badvpn (udpgw) is installed and active on port 7300.${C_RESET}"
+        echo -e "\n${C_GREEN}✅ SUCCESS: badvpn (udpgw) is installed and active on port $DEFAULT_BADVPN_PORT.${C_RESET}"
     else
         echo -e "\n${C_RED}❌ ERROR: badvpn service failed to start.${C_RESET}"
         echo -e "${C_YELLOW}ℹ️ Displaying last 15 lines of the service log for diagnostics:${C_RESET}"
@@ -1088,8 +1132,8 @@ install_ssl_tunnel() {
         echo -e "\n${C_YELLOW}⚠️ HAProxy not found. Installing...${C_RESET}"
         apt-get update && apt-get install -y haproxy || { echo -e "${C_RED}❌ Failed to install HAProxy.${C_RESET}"; return; }
     fi
-    read -p "👉 Enter the port for the SSL tunnel [444]: " ssl_port
-    ssl_port=${ssl_port:-444}
+    read -p "👉 Enter the port for the SSL tunnel [$DEFAULT_SSL_TUNNEL_PORT]: " ssl_port
+    ssl_port=${ssl_port:-$DEFAULT_SSL_TUNNEL_PORT}
     if ! [[ "$ssl_port" =~ ^[0-9]+$ ]] || [ "$ssl_port" -lt 1 ] || [ "$ssl_port" -gt 65535 ]; then
         echo -e "\n${C_RED}❌ Invalid port number. Aborting.${C_RESET}"
         return
@@ -1358,7 +1402,7 @@ show_dnstt_details() {
             echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
             echo -e "${C_BOLD}${C_YELLOW}  ⚠️ ACTION REQUIRED${C_RESET}"
             echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Ensure a V2Ray service (VLESS/VMESS/Trojan) is listening on port 8787 (no TLS)${C_RESET}"
+            echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Ensure a V2Ray service (VLESS/VMESS/Trojan) is listening on port $DEFAULT_V2RAY_PORT (no TLS)${C_RESET}"
         elif [[ "$FORWARD_DESC" == *"SSH"* ]]; then
             echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
             echo -e "${C_BOLD}${C_YELLOW}  ⚠️ ACTION REQUIRED${C_RESET}"
@@ -1633,8 +1677,8 @@ install_dnstt() {
         rm -f /etc/resolv.conf
     fi
     rm -f /etc/resolv.conf
-    echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+    echo "nameserver $DNS_PRIMARY" > /etc/resolv.conf
+    echo "nameserver $DNS_SECONDARY" >> /etc/resolv.conf
     chattr +i /etc/resolv.conf 2>/dev/null
     
     # Kill any remaining systemd-resolved processes
@@ -1662,7 +1706,8 @@ install_dnstt() {
                 systemctl disable systemd-resolved
                 chattr -i /etc/resolv.conf &>/dev/null
                 rm -f /etc/resolv.conf
-                echo "nameserver 8.8.8.8" > /etc/resolv.conf
+                echo "nameserver $DNS_PRIMARY" > /etc/resolv.conf
+                echo "nameserver $DNS_SECONDARY" >> /etc/resolv.conf
                 chattr +i /etc/resolv.conf
                 echo -e "${C_GREEN}✅ Port 53 has been freed and DNS set to 8.8.8.8.${C_RESET}"
             else
@@ -1691,7 +1736,7 @@ install_dnstt() {
     local forward_desc=""
     echo -e "\n${C_BLUE}Please choose where DNSTT should forward traffic:${C_RESET}"
     echo -e "  ${C_GREEN}1)${C_RESET} ➡️ Forward to local SSH service (port 22)"
-    echo -e "  ${C_GREEN}2)${C_RESET} ➡️ Forward to local V2Ray backend (port 8787)"
+    echo -e "  ${C_GREEN}2)${C_RESET} ➡️ Forward to local V2Ray backend (port $DEFAULT_V2RAY_PORT)"
     read -p "👉 Enter your choice [2]: " fwd_choice
     fwd_choice=${fwd_choice:-2}
     if [[ "$fwd_choice" == "1" ]]; then
@@ -1699,9 +1744,9 @@ install_dnstt() {
         forward_desc="SSH (port 22)"
         echo -e "${C_GREEN}ℹ️ DNSTT will forward to SSH on 127.0.0.1:22.${C_RESET}"
     elif [[ "$fwd_choice" == "2" ]]; then
-        forward_port="8787"
-        forward_desc="V2Ray (port 8787)"
-        echo -e "${C_GREEN}ℹ️ DNSTT will forward to V2Ray on 127.0.0.1:8787.${C_RESET}"
+        forward_port="$DEFAULT_V2RAY_PORT"
+        forward_desc="V2Ray (port $DEFAULT_V2RAY_PORT)"
+        echo -e "${C_GREEN}ℹ️ DNSTT will forward to V2Ray on 127.0.0.1:$DEFAULT_V2RAY_PORT.${C_RESET}"
     else
         echo -e "${C_RED}❌ Invalid choice. Aborting.${C_RESET}"
         return
@@ -1720,15 +1765,15 @@ install_dnstt() {
     read -p "👉 Enter your full tunnel domain (e.g., tun.yourdomain.com): " TUNNEL_DOMAIN
     if [[ -z "$TUNNEL_DOMAIN" ]]; then echo -e "\n${C_RED}❌ Tunnel domain cannot be empty. Aborting.${C_RESET}"; return; fi
 
-    read -p "👉 Enter MTU value (e.g., 512, 1200, 1800) or press [Enter] for 1800 (recommended for high speed): " mtu_value
+    read -p "👉 Enter MTU value (e.g., 512, 1200, 1800) or press [Enter] for $DEFAULT_DNSTT_MTU (recommended for high speed): " mtu_value
     local mtu_string=""
     if [[ "$mtu_value" =~ ^[0-9]+$ ]]; then
         mtu_string=" -mtu $mtu_value"
         echo -e "${C_GREEN}ℹ️ Using MTU: $mtu_value${C_RESET}"
     else
-        mtu_value="1800"
-        mtu_string=" -mtu 1800"
-        echo -e "${C_YELLOW}ℹ️ Using recommended MTU: 1800 for high speed performance.${C_RESET}"
+        mtu_value="$DEFAULT_DNSTT_MTU"
+        mtu_string=" -mtu $DEFAULT_DNSTT_MTU"
+        echo -e "${C_YELLOW}ℹ️ Using recommended MTU: $DEFAULT_DNSTT_MTU for high speed performance.${C_RESET}"
     fi
 
     echo -e "\n${C_BLUE}📥 Downloading pre-compiled DNSTT server binary...${C_RESET}"
@@ -2297,8 +2342,8 @@ install_falcon_proxy() {
     done
 
     local ports
-    read -p "👉 Enter port(s) for Falcon Proxy (e.g., 8080 or 8080 8888) [8080]: " ports
-    ports=${ports:-8080}
+    read -p "👉 Enter port(s) for Falcon Proxy (e.g., $DEFAULT_FALCON_PROXY_PORT or $DEFAULT_FALCON_PROXY_PORT 8888) [$DEFAULT_FALCON_PROXY_PORT]: " ports
+    ports=${ports:-$DEFAULT_FALCON_PROXY_PORT}
 
     local port_array=($ports)
     for port in "${port_array[@]}"; do

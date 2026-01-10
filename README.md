@@ -285,6 +285,8 @@ Email: admin@example.com
 | `/etc/systemd/system/*.service` | Systemd service files |
 | `/usr/local/bin/dnstt-edns-proxy.py` | EDNS proxy script |
 
+> 💡 **Want to customize default settings?** Check out [CONFIGURATION.md](CONFIGURATION.md) for manual configuration options including DNS servers, default ports, timeouts, and more!
+
 ---
 
 ## 🔄 Active Limiter Service
