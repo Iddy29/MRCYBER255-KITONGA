@@ -148,6 +148,9 @@ if [[ "$DOWNLOAD_SUCCESS" == "true" ]]; then
     echo ""
     echo "Download completed. File size: $(du -h "$MENU_PATH" | cut -f1)"
     echo ""
+    echo "Fixing line endings (converting CRLF to LF if needed)..."
+    # Convert CRLF to LF (fixes Windows line endings issue on Linux)
+    sed -i 's/\r$//' "$MENU_PATH" 2>/dev/null || sed -i '' 's/\r$//' "$MENU_PATH" 2>/dev/null || tr -d '\r' < "$MENU_PATH" > "${MENU_PATH}.tmp" && mv "${MENU_PATH}.tmp" "$MENU_PATH"
     echo "Setting executable permissions..."
     chmod +x "$MENU_PATH"
     
