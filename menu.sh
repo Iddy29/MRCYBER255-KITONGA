@@ -1397,24 +1397,17 @@ show_dnstt_details() {
         local current_pubkey=""
         
         if [[ -f "$pubkey_file" ]]; then
-            current_pubkey=$(cat "$pubkey_file" 2>/dev/null | tr -d '\n\r' | head -c 200)
+            current_pubkey=$(cat "$pubkey_file" 2>/dev/null | tr -d '\n\r')
         fi
         
         if [[ -n "$current_pubkey" ]]; then
             echo -e "     ${C_YELLOW}$current_pubkey${C_RESET}"
-            if [[ ${#current_pubkey} -gt 200 ]]; then
-                echo -e "     ${C_DIM}... (truncated, full key in file)${C_RESET}"
-            fi
+            echo -e "     ${C_DIM}📄 File: $pubkey_file${C_RESET}"
+            echo -e "     ${C_DIM}💡 Copy the full key above for VPN client configuration${C_RESET}"
         elif [[ -n "$PUBLIC_KEY" ]]; then
             echo -e "     ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
         else
             echo -e "     ${C_RED}❌ Public key not found${C_RESET}"
-        fi
-        
-        # Show file path for easy access
-        if [[ -f "$pubkey_file" ]]; then
-            echo -e "     ${C_DIM}📄 File: $pubkey_file${C_RESET}"
-            echo -e "     ${C_DIM}💡 View full key: cat $pubkey_file${C_RESET}"
         fi
         
         echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
