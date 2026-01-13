@@ -1460,6 +1460,58 @@ show_dnstt_details() {
             echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Configure your SSH client to use the DNS tunnel${C_RESET}"
         fi
         
+        # Display user accounts with credentials for DNSTT connection
+        echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "${C_BOLD}${C_CYAN}  👤 USER ACCOUNTS FOR DNSTT CONNECTION${C_RESET}"
+        echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        
+        if [[ -f "$DB_FILE" ]] && [[ -s "$DB_FILE" ]]; then
+            local user_count=0
+            while IFS=: read -r user pass expiry limit; do
+                [[ -z "$user" || "$user" == \#* ]] && continue
+                
+                # Check if user account is active (not locked and not expired)
+                local user_status=""
+                local status_color="$C_GREEN"
+                local account_status="✅ Active"
+                
+                if ! id "$user" &>/dev/null; then
+                    account_status="❌ Not Found"
+                    status_color="$C_RED"
+                elif passwd -S "$user" 2>/dev/null | grep -q " L "; then
+                    account_status="🔒 Locked"
+                    status_color="$C_YELLOW"
+                else
+                    # Check expiry
+                    local expiry_ts=$(date -d "$expiry" +%s 2>/dev/null || echo 0)
+                    local current_ts=$(date +%s)
+                    if [[ $expiry_ts -lt $current_ts && $expiry_ts -ne 0 ]]; then
+                        account_status="⏰ Expired"
+                        status_color="$C_RED"
+                    fi
+                fi
+                
+                user_count=$((user_count + 1))
+                echo -e "\n  ${C_GREEN}${user_count}️⃣${C_RESET} ${C_WHITE}Username:${C_RESET}     ${C_YELLOW}$user${C_RESET}"
+                echo -e "     ${C_WHITE}Password:${C_RESET}     ${C_YELLOW}$pass${C_RESET}"
+                echo -e "     ${C_WHITE}Expires:${C_RESET}      ${C_YELLOW}$expiry${C_RESET}"
+                echo -e "     ${C_WHITE}Status:${C_RESET}      ${status_color}$account_status${C_RESET}"
+                
+                if [[ "$FORWARD_DESC" == *"SSH"* ]]; then
+                    echo -e "     ${C_DIM}💡 Use these credentials with DNSTT → SSH tunnel${C_RESET}"
+                fi
+            done < <(sort "$DB_FILE")
+            
+            if [[ $user_count -eq 0 ]]; then
+                echo -e "  ${C_YELLOW}⚠️ No users found in database. Create users first to use DNSTT.${C_RESET}"
+            else
+                echo -e "\n  ${C_DIM}💡 Total users: ${C_YELLOW}$user_count${C_RESET}"
+            fi
+        else
+            echo -e "  ${C_YELLOW}⚠️ No user database found. Create users first to use DNSTT.${C_RESET}"
+            echo -e "  ${C_DIM}💡 Use option 1 in main menu to create new users${C_RESET}"
+        fi
+        
         echo -e "\n${C_DIM}${C_ITALIC}💼 Use these details in your client configuration${C_RESET}"
     else
         echo -e "\n${C_YELLOW}⚠️ DNSTT configuration file not found. Details are unavailable.${C_RESET}"
@@ -1939,20 +1991,23 @@ install_dnstt() {
         return 1
     }
     
-    # Check if keys already exist - reuse them to maintain constant public key
-    if [[ -f "$DNSTT_KEYS_DIR/server.key" ]] && [[ -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
+    # Check if keys already exist - DO NOT regenerate if server.key exists
+    if [[ -f "$DNSTT_KEYS_DIR/server.key" ]]; then
         echo -e "${C_GREEN}✅ Using existing DNSTT keys (maintaining constant public key)${C_RESET}"
-        # Verify existing keys are valid
-        if [[ -f "$DNSTT_BINARY" ]] && "$DNSTT_BINARY" -test-keys -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub" >/dev/null 2>&1; then
-            echo -e "${C_GREEN}✅ Existing key pair verified and valid${C_RESET}"
-        else
-            echo -e "${C_YELLOW}⚠️ Existing keys found but verification failed. Keys will be regenerated...${C_RESET}"
-            rm -f "$DNSTT_KEYS_DIR/server.key" "$DNSTT_KEYS_DIR/server.pub"
+        if [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
+            echo -e "${C_YELLOW}⚠️ Warning: server.key exists but server.pub is missing. Regenerating public key...${C_RESET}"
+            if [[ -f "$DNSTT_BINARY" ]]; then
+                if ! "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub" 2>/dev/null; then
+                    echo -e "${C_RED}❌ Failed to regenerate public key.${C_RESET}"
+                    return 1
+                fi
+            else
+                echo -e "${C_RED}❌ DNSTT binary not found. Cannot regenerate public key.${C_RESET}"
+                return 1
+            fi
         fi
-    fi
-    
-    # Generate new keys only if they don't exist or were invalid
-    if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]] || [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
+    else
+        # Generate new keys only if server.key does NOT exist
         echo -e "${C_BLUE}🔐 Generating new cryptographic keys...${C_RESET}"
         if ! "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub" 2>/dev/null; then
             echo -e "${C_RED}❌ Failed to generate DNSTT keys.${C_RESET}"
