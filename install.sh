@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Repository Configuration
 REPO_NAME="MRCYBER255-KITONGA"
@@ -150,13 +150,37 @@ if [[ "$DOWNLOAD_SUCCESS" == "true" ]]; then
     echo ""
     echo "Fixing line endings (converting CRLF to LF if needed)..."
     # Convert CRLF to LF (fixes Windows line endings issue on Linux)
-    sed -i 's/\r$//' "$MENU_PATH" 2>/dev/null || sed -i '' 's/\r$//' "$MENU_PATH" 2>/dev/null || tr -d '\r' < "$MENU_PATH" > "${MENU_PATH}.tmp" && mv "${MENU_PATH}.tmp" "$MENU_PATH"
+    # Try multiple methods to ensure compatibility across different systems
+    if command -v dos2unix &> /dev/null; then
+        dos2unix "$MENU_PATH" 2>/dev/null
+    elif command -v sed &> /dev/null; then
+        sed -i 's/\r$//' "$MENU_PATH" 2>/dev/null || sed -i '' 's/\r$//' "$MENU_PATH" 2>/dev/null
+    else
+        tr -d '\r' < "$MENU_PATH" > "${MENU_PATH}.tmp" && mv "${MENU_PATH}.tmp" "$MENU_PATH"
+    fi
+    
+    # Verify line endings were fixed by checking for CRLF
+    if file "$MENU_PATH" 2>/dev/null | grep -q "CRLF\|with CRLF"; then
+        echo "Warning: CRLF line endings detected, attempting additional fix..."
+        perl -pi -e 's/\r\n/\n/g' "$MENU_PATH" 2>/dev/null || tr -d '\r' < "$MENU_PATH" > "${MENU_PATH}.tmp" && mv "${MENU_PATH}.tmp" "$MENU_PATH"
+    fi
+    
     echo "Setting executable permissions..."
     chmod +x "$MENU_PATH"
     
+    # Verify shebang exists and is correct
+    if ! head -n 1 "$MENU_PATH" | grep -q "#!/bin/bash\|#!/usr/bin/env bash"; then
+        echo "Warning: Script may not have a valid shebang line."
+    fi
+    
     if [[ ! -x "$MENU_PATH" ]]; then
         echo "Error: Failed to set executable permissions."
-        exit 1
+        echo "Attempting manual fix..."
+        chmod 755 "$MENU_PATH"
+        if [[ ! -x "$MENU_PATH" ]]; then
+            echo "Error: Still unable to set executable permissions. Please run manually: chmod +x $MENU_PATH"
+            exit 1
+        fi
     fi
     
     echo "Running initial setup..."
