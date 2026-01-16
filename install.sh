@@ -13,6 +13,52 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+# Fix DNS configuration if DNS resolution fails
+fix_dns() {
+    echo "🔧 Fixing DNS configuration..."
+    
+    # Check if /etc/resolv.conf exists
+    if [[ ! -f /etc/resolv.conf ]]; then
+        touch /etc/resolv.conf
+    fi
+    
+    # Add reliable DNS servers if not present
+    if ! grep -q "nameserver 8.8.8.8" /etc/resolv.conf 2>/dev/null; then
+        echo "  📝 Adding Google DNS (8.8.8.8)..."
+        echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+    fi
+    
+    if ! grep -q "nameserver 1.1.1.1" /etc/resolv.conf 2>/dev/null; then
+        echo "  📝 Adding Cloudflare DNS (1.1.1.1)..."
+        echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+    fi
+    
+    # Try to flush DNS cache
+    if command -v systemd-resolve &> /dev/null; then
+        systemd-resolve --flush-caches 2>/dev/null || true
+    fi
+    
+    # Wait a moment for DNS to update
+    sleep 2
+    echo "  ✅ DNS configuration updated"
+}
+
+# Add GitHub IP to /etc/hosts as fallback
+add_github_hosts() {
+    echo "  📝 Adding GitHub IPs to /etc/hosts as fallback..."
+    if ! grep -q "raw.githubusercontent.com" /etc/hosts 2>/dev/null; then
+        # GitHub raw content CDN IPs (these may need updating)
+        echo "# GitHub raw content CDN" >> /etc/hosts
+        echo "185.199.108.133 raw.githubusercontent.com" >> /etc/hosts
+        echo "185.199.109.133 raw.githubusercontent.com" >> /etc/hosts
+        echo "185.199.110.133 raw.githubusercontent.com" >> /etc/hosts
+        echo "185.199.111.133 raw.githubusercontent.com" >> /etc/hosts
+        echo "  ✅ GitHub IPs added to /etc/hosts"
+    else
+        echo "  ℹ️  GitHub IPs already in /etc/hosts"
+    fi
+}
+
 echo "Installing ${REPO_NAME} Manager..."
 
 MENU_URL="${REPO_BASE_URL}/menu.sh"
@@ -94,8 +140,37 @@ fi
 
 if [[ "$DNS_OK" != "true" ]]; then
     echo "⚠️  Warning: DNS resolution for raw.githubusercontent.com failed."
-    echo "  This might be a DNS or network connectivity issue."
-    echo "  Attempting to continue anyway..."
+    echo "  Attempting to fix DNS configuration..."
+    echo ""
+    fix_dns
+    echo ""
+    
+    # Test again after fixing DNS
+    DNS_OK=false
+    if command -v host &> /dev/null; then
+        if host raw.githubusercontent.com > /dev/null 2>&1; then
+            DNS_OK=true
+        fi
+    fi
+    if [[ "$DNS_OK" != "true" ]] && command -v nslookup &> /dev/null; then
+        if nslookup raw.githubusercontent.com > /dev/null 2>&1; then
+            DNS_OK=true
+        fi
+    fi
+    if [[ "$DNS_OK" != "true" ]] && command -v getent &> /dev/null; then
+        if getent hosts raw.githubusercontent.com > /dev/null 2>&1; then
+            DNS_OK=true
+        fi
+    fi
+    
+    # If DNS still doesn't work, add hosts file entries
+    if [[ "$DNS_OK" != "true" ]]; then
+        echo "⚠️  DNS resolution still failing. Adding GitHub IPs to /etc/hosts..."
+        add_github_hosts
+        sleep 1
+    else
+        echo "✅ DNS resolution working after fix!"
+    fi
     echo ""
 fi
 
