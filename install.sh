@@ -73,19 +73,50 @@ if [[ "$MENU_URL" == *"githubuserecontent"* ]] || [[ "$MENU_URL" == *"githubcont
     exit 1
 fi
 
-# Test URL reachability before attempting download
+# Test DNS resolution and URL reachability before attempting download
+echo "Testing DNS resolution..."
+DNS_OK=false
+if command -v nslookup &> /dev/null; then
+    if nslookup raw.githubusercontent.com > /dev/null 2>&1; then
+        DNS_OK=true
+    fi
+fi
+if [[ "$DNS_OK" != "true" ]] && command -v getent &> /dev/null; then
+    if getent hosts raw.githubusercontent.com > /dev/null 2>&1; then
+        DNS_OK=true
+    fi
+fi
+if [[ "$DNS_OK" != "true" ]] && command -v host &> /dev/null; then
+    if host raw.githubusercontent.com > /dev/null 2>&1; then
+        DNS_OK=true
+    fi
+fi
+
+if [[ "$DNS_OK" != "true" ]]; then
+    echo "⚠️  Warning: DNS resolution for raw.githubusercontent.com failed."
+    echo "  This might be a DNS or network connectivity issue."
+    echo "  Attempting to continue anyway..."
+    echo ""
+fi
+
 echo "Testing URL reachability..."
+REACHABLE=false
 if command -v curl &> /dev/null; then
-    if ! curl -4 -I -s --max-time 10 "$MENU_URL" | grep -q "HTTP/.*200\|HTTP/.*302"; then
-        echo "Warning: URL may not be reachable. Continuing anyway..."
+    if curl -4 -I -s --max-time 10 "$MENU_URL" 2>&1 | grep -q "HTTP/.*200\|HTTP/.*302"; then
+        echo "✅ URL is reachable via curl. Proceeding with download..."
+        REACHABLE=true
+    elif curl -4 -I -s --max-time 10 -k "$MENU_URL" 2>&1 | grep -q "HTTP/.*200\|HTTP/.*302"; then
+        echo "⚠️  URL reachable but with certificate issues. Continuing..."
+        REACHABLE=true
     else
-        echo "URL is reachable. Proceeding with download..."
+        echo "⚠️  Warning: URL may not be reachable via curl. Will still attempt download..."
     fi
 elif command -v wget &> /dev/null; then
-    if ! wget --spider --prefer-family=IPv4 -T 10 "$MENU_URL" 2>&1 | grep -q "200 OK\|302 Found"; then
-        echo "Warning: URL may not be reachable. Continuing anyway..."
+    if wget --spider --prefer-family=IPv4 -T 10 "$MENU_URL" 2>&1 | grep -q "200 OK\|302 Found"; then
+        echo "✅ URL is reachable via wget. Proceeding with download..."
+        REACHABLE=true
     else
-        echo "URL is reachable. Proceeding with download..."
+        echo "⚠️  Warning: URL may not be reachable via wget. Will still attempt download..."
     fi
 fi
 echo ""
@@ -114,6 +145,14 @@ while [[ $DOWNLOAD_ATTEMPTS -lt $MAX_ATTEMPTS ]]; do
             if [[ -f "$MENU_PATH" ]]; then
                 rm -f "$MENU_PATH"
             fi
+            # Try without IPv4 restriction on retry
+            if [[ $DOWNLOAD_ATTEMPTS -eq 2 ]]; then
+                echo "Trying without IPv4 restriction..."
+                if wget --timeout=30 --tries=2 -O "$MENU_PATH" "$MENU_URL" 2>&1; then
+                    DOWNLOAD_SUCCESS=true
+                    break
+                fi
+            fi
         fi
     elif [[ "$DOWNLOAD_CMD" == "curl" ]]; then
         # curl format: curl [flags] -o output_file url
@@ -125,9 +164,56 @@ while [[ $DOWNLOAD_ATTEMPTS -lt $MAX_ATTEMPTS ]]; do
             if [[ -f "$MENU_PATH" ]]; then
                 rm -f "$MENU_PATH"
             fi
+            # Try with different options on retry
+            if [[ $DOWNLOAD_ATTEMPTS -eq 2 ]]; then
+                echo "Trying with different connection options..."
+                # Try without IPv4 restriction, with insecure SSL if needed
+                if curl -L --connect-timeout 30 --max-time 60 -o "$MENU_PATH" "$MENU_URL" 2>&1 || \
+                   curl -L --connect-timeout 30 --max-time 60 -k -o "$MENU_PATH" "$MENU_URL" 2>&1; then
+                    DOWNLOAD_SUCCESS=true
+                    break
+                fi
+            fi
         fi
     fi
 done
+
+# If download failed, try GitHub API as fallback
+if [[ "$DOWNLOAD_SUCCESS" != "true" ]]; then
+    echo ""
+    echo "⚠️  Primary download methods failed. Attempting GitHub API fallback..."
+    GITHUB_API_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/menu.sh?ref=${REPO_BRANCH_NAME}"
+    
+    if command -v curl &> /dev/null; then
+        echo "Fetching download URL from GitHub API..."
+        DOWNLOAD_URL=$(curl -4 -s -L --max-time 30 "$GITHUB_API_URL" | grep -o '"download_url":"[^"]*"' | cut -d'"' -f4)
+        
+        if [[ -n "$DOWNLOAD_URL" ]]; then
+            echo "Using GitHub API download URL: $DOWNLOAD_URL"
+            if curl -4 -L --connect-timeout 30 --max-time 60 -o "$MENU_PATH" "$DOWNLOAD_URL" 2>&1 || \
+               curl -L --connect-timeout 30 --max-time 60 -o "$MENU_PATH" "$DOWNLOAD_URL" 2>&1; then
+                if [[ -f "$MENU_PATH" ]] && [[ -s "$MENU_PATH" ]]; then
+                    echo "✅ Successfully downloaded via GitHub API!"
+                    DOWNLOAD_SUCCESS=true
+                fi
+            fi
+        fi
+    elif command -v wget &> /dev/null; then
+        echo "Fetching download URL from GitHub API..."
+        DOWNLOAD_URL=$(wget --prefer-family=IPv4 -q -O - --timeout=30 "$GITHUB_API_URL" 2>/dev/null | grep -o '"download_url":"[^"]*"' | cut -d'"' -f4)
+        
+        if [[ -n "$DOWNLOAD_URL" ]]; then
+            echo "Using GitHub API download URL: $DOWNLOAD_URL"
+            if wget --prefer-family=IPv4 --timeout=30 -O "$MENU_PATH" "$DOWNLOAD_URL" 2>&1 || \
+               wget --timeout=30 -O "$MENU_PATH" "$DOWNLOAD_URL" 2>&1; then
+                if [[ -f "$MENU_PATH" ]] && [[ -s "$MENU_PATH" ]]; then
+                    echo "✅ Successfully downloaded via GitHub API!"
+                    DOWNLOAD_SUCCESS=true
+                fi
+            fi
+        fi
+    fi
+fi
 
 if [[ "$DOWNLOAD_SUCCESS" == "true" ]]; then
     # Check if download was successful
@@ -137,8 +223,8 @@ if [[ "$DOWNLOAD_SUCCESS" == "true" ]]; then
         exit 1
     fi
     
-    # Check if it's a valid bash script
-    if ! head -n 1 "$MENU_PATH" | grep -q "#!/bin/bash"; then
+    # Check if it's a valid bash script (accept both shebang formats)
+    if ! head -n 1 "$MENU_PATH" | grep -q "#!/bin/bash\|#!/usr/bin/env bash"; then
         echo "Error: Downloaded file does not appear to be a valid bash script."
         echo "Please check the repository URL and try again."
         rm -f "$MENU_PATH"
@@ -233,14 +319,29 @@ else
     echo "  - URL typo or incorrect repository/branch name"
     echo ""
     echo "Troubleshooting steps:"
-    echo "  1. Test DNS resolution: nslookup raw.githubusercontent.com"
-    echo "  2. Test connectivity: ping -4 raw.githubusercontent.com"
-    echo "  3. Test with curl: curl -4 -I https://raw.githubusercontent.com"
-    echo "  4. Test specific URL: curl -4 -I \"$MENU_URL\""
-    echo "  5. Check firewall rules"
-    echo "  6. Verify repository exists: https://github.com/${REPO_OWNER}/${REPO_NAME}"
-    echo "  7. Try manual download:"
+    echo "  1. Test DNS resolution:"
+    echo "     nslookup raw.githubusercontent.com"
+    echo "     getent hosts raw.githubusercontent.com"
+    echo "  2. Test connectivity:"
+    echo "     ping -4 -c 3 raw.githubusercontent.com"
+    echo "     ping -c 3 raw.githubusercontent.com"
+    echo "  3. Test with curl (HTTP check):"
+    echo "     curl -4 -I https://raw.githubusercontent.com"
+    echo "     curl -I https://raw.githubusercontent.com"
+    echo "  4. Test specific URL:"
+    echo "     curl -4 -I \"$MENU_URL\""
+    echo "     curl -I \"$MENU_URL\""
+    echo "  5. Check firewall rules:"
+    echo "     iptables -L -n | grep -i github"
+    echo "     ufw status"
+    echo "  6. Verify repository exists:"
+    echo "     https://github.com/${REPO_OWNER}/${REPO_NAME}"
+    echo "  7. Check if GitHub is blocked (try alternative method):"
+    echo "     curl -L \"https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/menu.sh?ref=${REPO_BRANCH_NAME}\" | grep -o '\"download_url\":\"[^\"]*\"'"
+    echo "  8. Try manual download (use whichever works):"
     echo "     wget --prefer-family=IPv4 -O /usr/local/bin/menu \"$MENU_URL\""
+    echo "     curl -4 -L -o /usr/local/bin/menu \"$MENU_URL\""
+    echo "     curl -L -o /usr/local/bin/menu \"$MENU_URL\""
     echo "     chmod +x /usr/local/bin/menu"
     echo "     /usr/local/bin/menu --install-setup"
     echo ""
