@@ -19,6 +19,24 @@ Or using wget:
 wget -O install.sh "https://raw.githubusercontent.com/Iddy29/MRCYBER255-KITONGA/main/install.sh" && chmod +x install.sh && sudo ./install.sh && rm install.sh
 ```
 
+### 🚨 If you encounter DNS errors:
+
+The installer now **automatically fixes DNS issues**, but if you still have problems:
+
+```bash
+# Use bootstrap installer (handles DNS issues automatically)
+curl -L -o install-bootstrap.sh "https://raw.githubusercontent.com/Iddy29/MRCYBER255-KITONGA/main/install-bootstrap.sh" && chmod +x install-bootstrap.sh && sudo ./install-bootstrap.sh
+```
+
+Or manually fix DNS first:
+
+```bash
+echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+echo "185.199.108.133 raw.githubusercontent.com" >> /etc/hosts
+# Then run the regular installation above
+```
+
 After installation, simply type `menu` to start the management interface.
 
 > ⚠️ **Important:**
@@ -323,7 +341,36 @@ With one script, you can orchestrate multiple VPN and proxy technologies — **s
 
 ## 🌐 Connect with Us
 
-📣 **Telegram Channel
+📣 **Telegram Channel:** [Join our Telegram channel for updates and support](https://t.me/mrcyber255_kitonga)
+
+---
+
+## 🔧 Troubleshooting
+
+### DNS Resolution Issues
+
+If you encounter DNS resolution errors when downloading from GitHub:
+
+```bash
+# Option 1: Fix DNS and retry
+echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+echo "185.199.108.133 raw.githubusercontent.com" >> /etc/hosts
+
+# Option 2: Use bootstrap installer (auto-fixes DNS)
+curl -L -o install-bootstrap.sh "https://raw.githubusercontent.com/Iddy29/MRCYBER255-KITONGA/main/install-bootstrap.sh" && chmod +x install-bootstrap.sh && sudo ./install-bootstrap.sh
+```
+
+The main installer (`install.sh`) now automatically detects and fixes DNS issues.
+
+### Script Execution Issues
+
+If scripts fail to run on VPS:
+
+```bash
+# Fix line endings and permissions
+wget -O fix-vps.sh "https://raw.githubusercontent.com/Iddy29/MRCYBER255-KITONGA/main/fix-vps.sh" && chmod +x fix-vps.sh && sudo ./fix-vps.sh
+```
 
 ---
 

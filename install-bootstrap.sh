@@ -66,16 +66,21 @@ echo ""
 if [[ "$DNS_WORKING" != "true" ]]; then
     echo "⚠️  DNS resolution failed. Using GitHub IP addresses directly..."
     
-    # GitHub's raw content IP addresses (may need updating)
-    GITHUB_IPS=("185.199.108.133" "185.199.109.133" "185.199.110.133" "185.199.111.133")
-    
-    # Add GitHub IPs to /etc/hosts
-    for ip in "${GITHUB_IPS[@]}"; do
-        if ! grep -q "raw.githubusercontent.com" /etc/hosts 2>/dev/null; then
+    # Check if GitHub IPs already in /etc/hosts
+    if ! grep -q "raw.githubusercontent.com" /etc/hosts 2>/dev/null; then
+        # GitHub's raw content IP addresses (may need updating)
+        GITHUB_IPS=("185.199.108.133" "185.199.109.133" "185.199.110.133" "185.199.111.133")
+        
+        # Add GitHub IPs to /etc/hosts
+        echo "# GitHub raw content CDN (added by bootstrap installer)" >> /etc/hosts
+        for ip in "${GITHUB_IPS[@]}"; do
             echo "$ip raw.githubusercontent.com" >> /etc/hosts
             echo "  📝 Added $ip to /etc/hosts"
-        fi
-    done
+        done
+        echo "  ✅ GitHub IPs added to /etc/hosts"
+    else
+        echo "  ℹ️  GitHub IPs already in /etc/hosts"
+    fi
     
     sleep 1
 fi
