@@ -1518,6 +1518,83 @@ show_dnstt_details() {
     fi
 }
 
+check_dnstt_diagnostics() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🔍 DNSTT Diagnostics Check ---${C_RESET}"
+    echo ""
+    
+    # Check NS "managed by" condition
+    local SUB="ns3.voltrontechtx.shop"
+    local EXPECTED="idd.voltrontechtx.shop."
+    
+    echo -e "${C_BOLD}${C_CYAN}[1] Checking NS Condition${C_RESET}"
+    echo -e "${C_DIM}  Subdomain: $SUB${C_RESET}"
+    echo -e "${C_DIM}  Expected NS: $EXPECTED${C_RESET}"
+    
+    local ns_result
+    ns_result=$(dig +short NS "$SUB" 2>/dev/null || true)
+    if echo "$ns_result" | grep -qx "$EXPECTED"; then
+        echo -e "${C_GREEN}  ✅ [OK] NS condition met: $SUB -> $EXPECTED${C_RESET}"
+    else
+        echo -e "${C_YELLOW}  ⚠️  [WARN] NS not matching yet. Current:${C_RESET}"
+        if [[ -n "$ns_result" ]]; then
+            echo -e "${C_YELLOW}  $ns_result${C_RESET}" | while read -r line; do
+                echo -e "${C_YELLOW}  $line${C_RESET}"
+            done
+        else
+            echo -e "${C_YELLOW}  (No NS records found)${C_RESET}"
+        fi
+    fi
+    
+    echo ""
+    echo -e "${C_BOLD}${C_CYAN}[2] Checking Listening Ports${C_RESET}"
+    
+    # Check DNS port 53 (UDP)
+    echo -e "${C_DIM}  DNS :53/udp (authoritative resolver)${C_RESET}"
+    local dns_udp
+    dns_udp=$(sudo ss -lunp 2>/dev/null | grep -E ':53\s' || true)
+    if [[ -n "$dns_udp" ]]; then
+        echo -e "${C_GREEN}  ✅ DNS UDP:53 is listening${C_RESET}"
+        echo -e "${C_DIM}  $dns_udp${C_RESET}" | head -n1 | sed 's/^/    /'
+    else
+        echo -e "${C_YELLOW}  ⚠️  [WARN] nothing on udp:53${C_RESET}"
+    fi
+    
+    # Check DNS port 53 (TCP)
+    local dns_tcp
+    dns_tcp=$(sudo ss -lntp 2>/dev/null | grep -E ':53\s' || true)
+    if [[ -n "$dns_tcp" ]]; then
+        echo -e "${C_GREEN}  ✅ DNS TCP:53 is listening${C_RESET}"
+        echo -e "${C_DIM}  $dns_tcp${C_RESET}" | head -n1 | sed 's/^/    /'
+    else
+        echo -e "${C_DIM}  (TCP:53 not required for DNSTT)${C_RESET}"
+    fi
+    
+    # Check DNSTT port 5300 (UDP)
+    echo -e "${C_DIM}  DNSTT :5300/udp${C_RESET}"
+    local dnstt_listen
+    dnstt_listen=$(sudo ss -lunp 2>/dev/null | grep -E ':5300\s' || true)
+    if [[ -n "$dnstt_listen" ]]; then
+        echo -e "${C_GREEN}  ✅ DNSTT UDP:5300 is listening${C_RESET}"
+        echo -e "${C_DIM}  $dnstt_listen${C_RESET}" | head -n1 | sed 's/^/    /'
+    else
+        echo -e "${C_RED}  ❌ [FAIL] dnstt-server not listening on udp:5300${C_RESET}"
+    fi
+    
+    # Check SSH port 22 (TCP)
+    echo -e "${C_DIM}  SSH :22/tcp${C_RESET}"
+    local ssh_listen
+    ssh_listen=$(sudo ss -lntp 2>/dev/null | grep -E ':22\s' || true)
+    if [[ -n "$ssh_listen" ]]; then
+        echo -e "${C_GREEN}  ✅ SSH TCP:22 is listening${C_RESET}"
+        echo -e "${C_DIM}  $ssh_listen${C_RESET}" | head -n1 | sed 's/^/    /'
+    else
+        echo -e "${C_RED}  ❌ [FAIL] sshd not listening on tcp:22${C_RESET}"
+    fi
+    
+    echo ""
+}
+
 install_dnstt() {
     clear; show_banner
     echo -e "${C_BOLD}${C_PURPLE}--- 📡 DNSTT (DNS Tunnel) Management ---${C_RESET}"
@@ -1681,7 +1758,7 @@ install_dnstt() {
             echo -e "\n${C_BLUE}What would you like to do?${C_RESET}"
             echo -e "  ${C_GREEN}1)${C_RESET} 🔄 Restart all DNSTT services"
             echo -e "  ${C_GREEN}2)${C_RESET} 📋 View service logs"
-            echo -e "  ${C_GREEN}3)${C_RESET} 🔍 Diagnose port issues"
+            echo -e "  ${C_GREEN}3)${C_RESET} 🔍 Run DNSTT diagnostics (NS check + ports)"
             echo -e "  ${C_GREEN}4)${C_RESET} ⏭️  Continue (do nothing)"
             read -p "$(echo -e ${C_PROMPT}"👉 Select an option [1]: "${C_RESET})" restart_choice
             restart_choice=${restart_choice:-1}
@@ -1766,40 +1843,8 @@ install_dnstt() {
                     fi
                     ;;
                 3)
-                    echo -e "\n${C_BLUE}🔍 Diagnosing port issues...${C_RESET}"
-                    echo -e "\n${C_CYAN}Checking what's using port 53:${C_RESET}"
-                    if command -v ss &> /dev/null; then
-                        ss -lunp | grep -E ':(53|:53)\s' || echo -e "${C_YELLOW}  No process found listening on port 53${C_RESET}"
-                    fi
-                    if command -v netstat &> /dev/null; then
-                        netstat -lunp 2>/dev/null | grep -E ':(53|:53)\s' || echo -e "${C_YELLOW}  (netstat: no process found)${C_RESET}"
-                    fi
-                    if command -v lsof &> /dev/null; then
-                        lsof -i UDP:53 2>/dev/null || echo -e "${C_YELLOW}  (lsof: no process found)${C_RESET}"
-                    fi
-                    
-                    echo -e "\n${C_CYAN}Checking what's using port 5300:${C_RESET}"
-                    if command -v ss &> /dev/null; then
-                        ss -lunp | grep -E ':(5300|:5300)\s' || echo -e "${C_YELLOW}  No process found listening on port 5300${C_RESET}"
-                    fi
-                    if command -v netstat &> /dev/null; then
-                        netstat -lunp 2>/dev/null | grep -E ':(5300|:5300)\s' || echo -e "${C_YELLOW}  (netstat: no process found)${C_RESET}"
-                    fi
-                    if command -v lsof &> /dev/null; then
-                        lsof -i UDP:5300 2>/dev/null || echo -e "${C_YELLOW}  (lsof: no process found)${C_RESET}"
-                    fi
-                    
-                    echo -e "\n${C_CYAN}Checking systemd-resolved status:${C_RESET}"
-                    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-                        echo -e "${C_YELLOW}  ⚠️ systemd-resolved is active and may be blocking port 53${C_RESET}"
-                        echo -e "${C_DIM}  Run: systemctl stop systemd-resolved && systemctl disable systemd-resolved${C_RESET}"
-                    else
-                        echo -e "${C_GREEN}  ✅ systemd-resolved is not active${C_RESET}"
-                    fi
-                    
-                    echo -e "\n${C_CYAN}Checking firewall rules:${C_RESET}"
-                    if command -v ufw &> /dev/null; then
-                        ufw status | grep -E '(53|5300)' || echo -e "${C_DIM}  (No specific UFW rules found for ports 53/5300)${C_RESET}"
+                    check_dnstt_diagnostics
+                    press_enter
                     elif command -v firewall-cmd &> /dev/null; then
                         firewall-cmd --list-ports 2>/dev/null | grep -E '(53|5300)' || echo -e "${C_DIM}  (No specific firewalld rules found for ports 53/5300)${C_RESET}"
                     fi
