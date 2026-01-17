@@ -5352,13 +5352,12 @@ invalid_option() {
 }
 
 main_menu() {
-    # Run initial setup silently (only once, suppress output)
-    initial_setup >/dev/null 2>&1
+    # Run initial setup (suppress normal output, but show errors)
+    initial_setup 2>&1 | grep -v "^$" >/dev/null 2>&1 || true
     
     # Main menu loop - display options immediately
     while true; do
         export UNINSTALL_MODE="interactive"
-        clear
         show_banner
         
         # User Management Section - Stable Fixed Frame
