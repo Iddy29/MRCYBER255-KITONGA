@@ -2061,6 +2061,13 @@ LISTEN_PORT = 53
 UPSTREAM_HOST = "127.0.0.1"
 UPSTREAM_PORT = 5300
 
+# External DNS servers for regular DNS resolution
+EXTERNAL_DNS_SERVERS = ["8.8.8.8", "1.1.1.1", "8.8.4.4"]
+EXTERNAL_DNS_PORT = 53
+
+# DNSTT tunnel domain (must match the domain in service file)
+TUNNEL_DOMAIN = "idd.voltrontechtx.shop"
+
 # EDNS sizes
 EXTERNAL_EDNS_SIZE = 512    # what we show to resolvers
 INTERNAL_EDNS_SIZE = 1800   # what we tell dnstt-server internally
@@ -2147,25 +2154,135 @@ def patch_edns_udp_size(data: bytes, new_size: int) -> bytes:
     return data
 
 
+def extract_dns_name(data: bytes, offset: int) -> tuple:
+    """Extract DNS name from DNS message starting at offset. Returns (name, new_offset)."""
+    if offset >= len(data):
+        return ("", len(data))
+    
+    name_parts = []
+    current_offset = offset
+    jumped = False
+    max_jumps = 10
+    jump_count = 0
+    
+    while current_offset < len(data) and jump_count < max_jumps:
+        length = data[current_offset]
+        
+        # Check for compression pointer
+        if length & 0xC0 == 0xC0:
+            if current_offset + 1 >= len(data):
+                break
+            if not jumped:
+                offset = current_offset + 2
+            jump_offset = ((length & 0x3F) << 8) | data[current_offset + 1]
+            if jump_offset >= len(data):
+                break
+            current_offset = jump_offset
+            jumped = True
+            jump_count += 1
+            continue
+        
+        # End of name
+        if length == 0:
+            if not jumped:
+                offset = current_offset + 1
+            break
+        
+        # Label length
+        if length > 63:
+            break
+        
+        # Extract label
+        if current_offset + 1 + length > len(data):
+            break
+        label = data[current_offset + 1:current_offset + 1 + length].decode('utf-8', errors='ignore')
+        name_parts.append(label)
+        current_offset += 1 + length
+    
+    name = ".".join(name_parts)
+    if not jumped:
+        offset = current_offset + 1
+    return (name.lower(), offset)
+
+
+def is_dnstt_query(data: bytes) -> bool:
+    """Check if DNS query is for DNSTT tunnel domain."""
+    if len(data) < 12:
+        return False
+    
+    try:
+        # Extract question section
+        qdcount = struct.unpack("!H", data[4:6])[0]
+        if qdcount == 0:
+            return False
+        
+        # Extract domain name from question
+        name, _ = extract_dns_name(data, 12)
+        if not name:
+            return False
+        
+        # Check if query is for tunnel domain or subdomain
+        return name == TUNNEL_DOMAIN or name.endswith("." + TUNNEL_DOMAIN)
+    except:
+        return False
+
+
+def forward_to_external_dns(data: bytes) -> bytes:
+    """Forward DNS query to external DNS servers."""
+    for dns_server in EXTERNAL_DNS_SERVERS:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(5.0)
+            sock.sendto(data, (dns_server, EXTERNAL_DNS_PORT))
+            resp, _ = sock.recvfrom(4096)
+            sock.close()
+            if resp:
+                return resp
+        except:
+            continue
+    return b""
+
+
 def handle_request(server_sock: socket.socket, data: bytes, client_addr):
     """
-    - patch EDNS size to INTERNAL_EDNS_SIZE for request
-    - send to upstream (dnstt-server:5300)
-    - receive response, patch EDNS size to EXTERNAL_EDNS_SIZE
-    - return to client
+    - Check if query is for DNSTT tunnel domain
+    - If yes: forward to dnstt-server (port 5300) with EDNS size patching
+    - If no: forward to external DNS servers (8.8.8.8, etc.) for regular DNS resolution
+    - Return response to client
     """
     upstream_sock = None
     try:
-        upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        upstream_sock.settimeout(10.0)
+        # Check if this is a DNSTT tunnel query
+        is_tunnel_query = is_dnstt_query(data)
         
-        upstream_data = patch_edns_udp_size(data, INTERNAL_EDNS_SIZE)
-        upstream_sock.sendto(upstream_data, (UPSTREAM_HOST, UPSTREAM_PORT))
+        if is_tunnel_query:
+            # Forward to DNSTT server with EDNS size patching
+            upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            upstream_sock.settimeout(10.0)
+            
+            upstream_data = patch_edns_udp_size(data, INTERNAL_EDNS_SIZE)
+            upstream_sock.sendto(upstream_data, (UPSTREAM_HOST, UPSTREAM_PORT))
 
-        resp, _ = upstream_sock.recvfrom(4096)
-        if resp:
-            resp_patched = patch_edns_udp_size(resp, EXTERNAL_EDNS_SIZE)
-            server_sock.sendto(resp_patched, client_addr)
+            resp, _ = upstream_sock.recvfrom(4096)
+            if resp:
+                resp_patched = patch_edns_udp_size(resp, EXTERNAL_EDNS_SIZE)
+                server_sock.sendto(resp_patched, client_addr)
+        else:
+            # Forward regular DNS query to external DNS servers
+            resp = forward_to_external_dns(data)
+            if resp:
+                server_sock.sendto(resp, client_addr)
+            else:
+                # If all external DNS servers fail, try DNSTT as fallback
+                try:
+                    upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    upstream_sock.settimeout(5.0)
+                    upstream_sock.sendto(data, (UPSTREAM_HOST, UPSTREAM_PORT))
+                    resp, _ = upstream_sock.recvfrom(4096)
+                    if resp:
+                        server_sock.sendto(resp, client_addr)
+                except:
+                    pass
     except socket.timeout:
         # Timeout - upstream may be slow, client will resend
         pass
@@ -2194,7 +2311,9 @@ def main():
     try:
         server_sock.bind((LISTEN_HOST, LISTEN_PORT))
         print(f"[DNSTT EDNS proxy] Successfully bound to {LISTEN_HOST}:{LISTEN_PORT}")
-        print(f"[DNSTT EDNS proxy] Upstream: {UPSTREAM_HOST}:{UPSTREAM_PORT}")
+        print(f"[DNSTT EDNS proxy] DNSTT upstream: {UPSTREAM_HOST}:{UPSTREAM_PORT}")
+        print(f"[DNSTT EDNS proxy] External DNS servers: {', '.join(EXTERNAL_DNS_SERVERS)}")
+        print(f"[DNSTT EDNS proxy] Tunnel domain: {TUNNEL_DOMAIN}")
         print(f"[DNSTT EDNS proxy] External EDNS={EXTERNAL_EDNS_SIZE}, Internal EDNS={INTERNAL_EDNS_SIZE}")
     except PermissionError:
         print(f"[DNSTT EDNS proxy] ERROR: Permission denied binding to port {LISTEN_PORT}")
