@@ -5352,9 +5352,13 @@ invalid_option() {
 }
 
 main_menu() {
-    initial_setup
+    # Run initial setup silently (only once, suppress output)
+    initial_setup >/dev/null 2>&1
+    
+    # Main menu loop - display options immediately
     while true; do
         export UNINSTALL_MODE="interactive"
+        clear
         show_banner
         
         # User Management Section - Stable Fixed Frame
