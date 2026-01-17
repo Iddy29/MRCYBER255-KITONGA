@@ -1928,44 +1928,14 @@ install_dnstt() {
     local TUNNEL_SUBDOMAIN=""
     local HAS_IPV6="false"
 
-    # Get server IP for nameserver configuration
-    local server_ip=$(hostname -I | awk '{print $1}' | head -n1)
-    
     echo -e "${C_BLUE}📋 DNSTT Nameserver Configuration${C_RESET}"
-    echo -e "${C_YELLOW}💡 Important: The nameserver subdomain must point to your VPS IP via NS record${C_RESET}"
-    echo -e "${C_DIM}   Example: In your DNS provider, create NS record:${C_RESET}"
-    echo -e "${C_DIM}   - NS Record: ns1.yourdomain.com → points to your VPS subdomain${C_RESET}"
-    echo -e "${C_DIM}   - A Record: ns1.yourdomain.com → points to VPS IP: ${server_ip}${C_RESET}"
-    echo -e "${C_DIM}   This allows clients to use ns1.yourdomain.com as their DNS server${C_RESET}"
+    echo -e "${C_YELLOW}💡 Note: The nameserver domain is managed by the parent domain you'll configure later${C_RESET}"
     echo ""
     
     read -p "👉 Enter your full nameserver domain (e.g., ns1.yourdomain.com or subdomain.ns1.yourdomain.com): " NS_DOMAIN
     if [[ -z "$NS_DOMAIN" ]]; then echo -e "\n${C_RED}❌ Nameserver domain cannot be empty. Aborting.${C_RESET}"; return; fi
     
-    # Verify nameserver domain points to this server
-    echo -e "\n${C_BLUE}🔍 Verifying nameserver domain configuration...${C_RESET}"
-    local ns_resolved_ip=$(dig +short "$NS_DOMAIN" @8.8.8.8 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
-    if [[ -n "$ns_resolved_ip" ]]; then
-        if [[ "$ns_resolved_ip" == "$server_ip" ]]; then
-            echo -e "${C_GREEN}✅ Nameserver domain $NS_DOMAIN correctly points to this server ($server_ip)${C_RESET}"
-        else
-            echo -e "${C_YELLOW}⚠️  Warning: Nameserver domain $NS_DOMAIN resolves to $ns_resolved_ip, but server IP is $server_ip${C_RESET}"
-            echo -e "${C_YELLOW}   Make sure the NS record and A record are correctly configured in your DNS provider${C_RESET}"
-            read -p "👉 Continue anyway? (y/n): " continue_confirm
-            if [[ "$continue_confirm" != "y" && "$continue_confirm" != "Y" ]]; then
-                echo -e "${C_YELLOW}Installation cancelled. Please configure DNS correctly and try again.${C_RESET}"
-                return
-            fi
-        fi
-    else
-        echo -e "${C_YELLOW}⚠️  Warning: Could not resolve nameserver domain $NS_DOMAIN${C_RESET}"
-        echo -e "${C_YELLOW}   DNS propagation may take time. Ensure NS and A records are configured correctly.${C_RESET}"
-        read -p "👉 Continue anyway? (y/n): " continue_confirm
-        if [[ "$continue_confirm" != "y" && "$continue_confirm" != "Y" ]]; then
-            echo -e "${C_YELLOW}Installation cancelled. Please configure DNS correctly and try again.${C_RESET}"
-            return
-        fi
-    fi
+    echo -e "${C_GREEN}✅ Nameserver domain registered: $NS_DOMAIN${C_RESET}"
     
     # Fixed tunnel domain: idd.voltrontechtx.shop
     TUNNEL_DOMAIN="idd.voltrontechtx.shop"
