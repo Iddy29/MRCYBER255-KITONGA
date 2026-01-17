@@ -1915,26 +1915,11 @@ install_dnstt() {
     fi
     check_and_open_firewall_port 5300 udp || return
 
-    local forward_port=""
-    local forward_desc=""
-    echo -e "\n${C_BLUE}Please choose where DNSTT should forward traffic:${C_RESET}"
-    echo -e "  ${C_GREEN}1)${C_RESET} ➡️ Forward to local SSH service (port 22)"
-    echo -e "  ${C_GREEN}2)${C_RESET} ➡️ Forward to local V2Ray backend (port $DEFAULT_V2RAY_PORT)"
-    read -p "👉 Enter your choice [2]: " fwd_choice
-    fwd_choice=${fwd_choice:-2}
-    if [[ "$fwd_choice" == "1" ]]; then
-        forward_port="22"
-        forward_desc="SSH (port 22)"
-        echo -e "${C_GREEN}ℹ️ DNSTT will forward to SSH on 127.0.0.1:22.${C_RESET}"
-    elif [[ "$fwd_choice" == "2" ]]; then
-        forward_port="$DEFAULT_V2RAY_PORT"
-        forward_desc="V2Ray (port $DEFAULT_V2RAY_PORT)"
-        echo -e "${C_GREEN}ℹ️ DNSTT will forward to V2Ray on 127.0.0.1:$DEFAULT_V2RAY_PORT.${C_RESET}"
-    else
-        echo -e "${C_RED}❌ Invalid choice. Aborting.${C_RESET}"
-        return
-    fi
-    local FORWARD_TARGET="127.0.0.1:$forward_port"
+    # Fixed forward target: SSH on 127.0.0.1:22
+    local forward_port="22"
+    local forward_desc="SSH (port 22)"
+    local FORWARD_TARGET="127.0.0.1:22"
+    echo -e "${C_GREEN}ℹ️ DNSTT will forward to SSH on 127.0.0.1:22 (fixed configuration).${C_RESET}"
     
     local NS_DOMAIN=""
     local TUNNEL_DOMAIN=""
@@ -1943,21 +1928,17 @@ install_dnstt() {
     local TUNNEL_SUBDOMAIN=""
     local HAS_IPV6="false"
 
+    # Use fixed configuration: domain idd.voltrontechtx.shop (domain input still collected for config file)
     read -p "👉 Enter your full nameserver domain (e.g., ns1.yourdomain.com): " NS_DOMAIN
     if [[ -z "$NS_DOMAIN" ]]; then echo -e "\n${C_RED}❌ Nameserver domain cannot be empty. Aborting.${C_RESET}"; return; fi
-    read -p "👉 Enter your full tunnel domain (e.g., tun.yourdomain.com): " TUNNEL_DOMAIN
-    if [[ -z "$TUNNEL_DOMAIN" ]]; then echo -e "\n${C_RED}❌ Tunnel domain cannot be empty. Aborting.${C_RESET}"; return; fi
-
-    read -p "👉 Enter MTU value (e.g., 512, 1200, 1800) or press [Enter] for $DEFAULT_DNSTT_MTU (recommended for high speed): " mtu_value
-    local mtu_string=""
-    if [[ "$mtu_value" =~ ^[0-9]+$ ]]; then
-        mtu_string=" -mtu $mtu_value"
-        echo -e "${C_GREEN}ℹ️ Using MTU: $mtu_value${C_RESET}"
-    else
-        mtu_value="$DEFAULT_DNSTT_MTU"
-        mtu_string=" -mtu $DEFAULT_DNSTT_MTU"
-        echo -e "${C_YELLOW}ℹ️ Using recommended MTU: $DEFAULT_DNSTT_MTU for high speed performance.${C_RESET}"
-    fi
+    # Fixed tunnel domain: idd.voltrontechtx.shop
+    TUNNEL_DOMAIN="idd.voltrontechtx.shop"
+    echo -e "${C_GREEN}ℹ️ Using fixed tunnel domain: $TUNNEL_DOMAIN${C_RESET}"
+    
+    # Fixed MTU: 512 (not configurable)
+    local mtu_value="512"
+    local mtu_string=" -mtu 512"
+    echo -e "${C_GREEN}ℹ️ Using fixed MTU: 512${C_RESET}"
 
     echo -e "\n${C_BLUE}📥 Downloading pre-compiled DNSTT server binary...${C_RESET}"
     local arch
@@ -1984,49 +1965,62 @@ install_dnstt() {
         return 1
     fi
     chmod +x "$DNSTT_BINARY"
-
-    echo -e "${C_BLUE}🔐 Setting up cryptographic keys...${C_RESET}"
+    
+    # Use /root/dnstt/ as keys directory (as specified)
+    DNSTT_KEYS_DIR="/root/dnstt"
+    
+    # Copy binary to /root/dnstt/ for service file
     mkdir -p "$DNSTT_KEYS_DIR" || {
         echo -e "${C_RED}❌ Failed to create keys directory.${C_RESET}"
         return 1
     }
+    cp "$DNSTT_BINARY" "$DNSTT_KEYS_DIR/dnstt-server" 2>/dev/null || {
+        echo -e "${C_YELLOW}⚠️ Warning: Could not copy binary to /root/dnstt/, service will use /usr/local/bin/ path${C_RESET}"
+    }
+    chmod +x "$DNSTT_KEYS_DIR/dnstt-server" 2>/dev/null || true
+
+    echo -e "${C_BLUE}🔐 Setting up cryptographic keys...${C_RESET}"
+    
+    # Constant public key that must never change
+    CONSTANT_PUBLIC_KEY="f61eddddaa99d111d5a44b794e95313c9597b95094c3fe422c0a47a130ca3c99"
     
     # Check if keys already exist - DO NOT regenerate if server.key exists
     if [[ -f "$DNSTT_KEYS_DIR/server.key" ]]; then
         echo -e "${C_GREEN}✅ Using existing DNSTT keys (maintaining constant public key)${C_RESET}"
+        # Ensure public key file has the constant value
         if [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
-            echo -e "${C_YELLOW}⚠️ Warning: server.key exists but server.pub is missing. Regenerating public key...${C_RESET}"
-            if [[ -f "$DNSTT_BINARY" ]]; then
-                if ! "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub" 2>/dev/null; then
-                    echo -e "${C_RED}❌ Failed to regenerate public key.${C_RESET}"
-                    return 1
-                fi
-            else
-                echo -e "${C_RED}❌ DNSTT binary not found. Cannot regenerate public key.${C_RESET}"
-                return 1
+            echo -e "${C_YELLOW}⚠️ Warning: server.key exists but server.pub is missing. Setting constant public key...${C_RESET}"
+            echo "$CONSTANT_PUBLIC_KEY" > "$DNSTT_KEYS_DIR/server.pub"
+        else
+            # Verify public key matches constant value
+            local current_pubkey
+            current_pubkey=$(cat "$DNSTT_KEYS_DIR/server.pub" 2>/dev/null | tr -d '\n\r')
+            if [[ "$current_pubkey" != "$CONSTANT_PUBLIC_KEY" ]]; then
+                echo -e "${C_YELLOW}⚠️ Warning: Public key does not match constant value. Updating to constant key...${C_RESET}"
+                echo "$CONSTANT_PUBLIC_KEY" > "$DNSTT_KEYS_DIR/server.pub"
             fi
         fi
     else
-        # Generate new keys only if server.key does NOT exist
-        echo -e "${C_BLUE}🔐 Generating new cryptographic keys...${C_RESET}"
+        # Generate new private key only if server.key does NOT exist
+        echo -e "${C_BLUE}🔐 Generating new private key (public key will remain constant)...${C_RESET}"
         if ! "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub" 2>/dev/null; then
-            echo -e "${C_RED}❌ Failed to generate DNSTT keys.${C_RESET}"
+            echo -e "${C_RED}❌ Failed to generate DNSTT private key.${C_RESET}"
             return 1
         fi
-        if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]] || [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
-            echo -e "${C_RED}❌ Key files were not created successfully.${C_RESET}"
+        if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]]; then
+            echo -e "${C_RED}❌ Private key file was not created successfully.${C_RESET}"
             return 1
         fi
-        echo -e "${C_GREEN}✅ New DNSTT keys generated successfully${C_RESET}"
-        echo -e "${C_YELLOW}⚠️ IMPORTANT: Save this public key - it will remain constant unless you manually delete the key files${C_RESET}"
+        # Overwrite public key with constant value
+        echo "$CONSTANT_PUBLIC_KEY" > "$DNSTT_KEYS_DIR/server.pub"
+        echo -e "${C_GREEN}✅ Private key generated and constant public key set${C_RESET}"
+        echo -e "${C_YELLOW}⚠️ IMPORTANT: Public key is set to constant value and will not change${C_RESET}"
     fi
     
     local PUBLIC_KEY
-    PUBLIC_KEY=$(cat "$DNSTT_KEYS_DIR/server.pub" 2>/dev/null)
-    if [[ -z "$PUBLIC_KEY" ]]; then
-        echo -e "${C_RED}❌ Failed to read public key.${C_RESET}"
-        return 1
-    fi
+    PUBLIC_KEY="$CONSTANT_PUBLIC_KEY"
+    # Ensure public key file has the constant value
+    echo "$CONSTANT_PUBLIC_KEY" > "$DNSTT_KEYS_DIR/server.pub"
     
     # Check for Python3 and install if needed
     if ! command -v python3 &> /dev/null; then
@@ -2252,21 +2246,15 @@ EDNSPROXY
     fi
     
     echo -e "\n${C_BLUE}📝 Creating DNSTT systemd service (port 5300)...${C_RESET}"
+    # Use fixed configuration: MTU 512, domain idd.voltrontechtx.shop, forward to 127.0.0.1:22
     cat > "$DNSTT_SERVICE_FILE" <<-EOF
 [Unit]
-Description=DNSTT DNS Tunnel (smart & stable)
-After=network-online.target
-Wants=network-online.target
+After=network.target
 
 [Service]
-Type=simple
-ExecStart=$DNSTT_BINARY -udp :5300$mtu_string -privkey-file "$DNSTT_KEYS_DIR/server.key" "$TUNNEL_DOMAIN" "$FORWARD_TARGET"
+ExecStart=/root/dnstt/dnstt-server -udp :5300 -mtu 512 -privkey-file /root/dnstt/server.key idd.voltrontechtx.shop 127.0.0.1:22
 Restart=always
 RestartSec=3
-RestartPreventExitStatus=0
-StandardOutput=journal
-StandardError=journal
-User=root
 
 [Install]
 WantedBy=multi-user.target
