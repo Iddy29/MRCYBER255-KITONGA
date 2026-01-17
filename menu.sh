@@ -1538,9 +1538,9 @@ check_dnstt_diagnostics() {
     else
         echo -e "${C_YELLOW}  ⚠️  [WARN] NS not matching yet. Current:${C_RESET}"
         if [[ -n "$ns_result" ]]; then
-            echo -e "${C_YELLOW}  $ns_result${C_RESET}" | while read -r line; do
-                echo -e "${C_YELLOW}  $line${C_RESET}"
-            done
+            while IFS= read -r line; do
+                [[ -n "$line" ]] && echo -e "${C_YELLOW}  $line${C_RESET}"
+            done <<< "$ns_result"
         else
             echo -e "${C_YELLOW}  (No NS records found)${C_RESET}"
         fi
