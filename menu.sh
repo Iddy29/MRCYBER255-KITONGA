@@ -5354,10 +5354,7 @@ invalid_option() {
 }
 
 main_menu() {
-    # Run initial setup silently (only once, in background)
-    initial_setup >/dev/null 2>&1 || true
-    
-    # Main menu loop - display options immediately
+    initial_setup
     while true; do
         export UNINSTALL_MODE="interactive"
         show_banner
