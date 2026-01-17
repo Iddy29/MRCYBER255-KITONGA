@@ -366,12 +366,50 @@ if [[ "$DOWNLOAD_SUCCESS" == "true" ]]; then
     
     if [[ "$SETUP_SUCCESS" == "true" ]]; then
         echo ""
-        echo "✅ Installation complete! Type 'menu' to start."
+        echo "✅ Installation complete!"
+        echo ""
+        echo "Verifying menu installation..."
+        
+        # Verify menu file exists and is executable
+        if [[ -f "$MENU_PATH" ]] && [[ -x "$MENU_PATH" ]]; then
+            echo "✅ Menu file exists and is executable: $MENU_PATH"
+            
+            # Test if menu can be found in PATH
+            if command -v menu &> /dev/null; then
+                echo "✅ 'menu' command is available in PATH"
+            else
+                echo "⚠️  'menu' command not found in PATH, but file exists at: $MENU_PATH"
+                echo "   You can use: /usr/local/bin/menu"
+                echo "   Or add /usr/local/bin to your PATH"
+            fi
+            
+            # Verify shebang is correct
+            if head -n 1 "$MENU_PATH" | grep -q "#!/usr/bin/env bash\|#!/bin/bash"; then
+                echo "✅ Menu script has valid shebang"
+            else
+                echo "⚠️  Warning: Menu script may have invalid shebang"
+            fi
+            
+            echo ""
+            echo "🚀 You can now run the menu with:"
+            echo "   menu"
+            echo "   or"
+            echo "   /usr/local/bin/menu"
+        else
+            echo "❌ Error: Menu file is missing or not executable at: $MENU_PATH"
+            echo "   Please check file permissions: ls -l $MENU_PATH"
+            exit 1
+        fi
     else
         echo ""
         echo "⚠️  Warning: Initial setup encountered some issues or timed out."
         echo "You can still try running 'menu' to see if it works."
-        echo "If 'menu' doesn't work, try: /usr/local/bin/menu"
+        echo ""
+        echo "Troubleshooting:"
+        echo "  1. Check if menu exists: ls -l /usr/local/bin/menu"
+        echo "  2. Make it executable: chmod +x /usr/local/bin/menu"
+        echo "  3. Run directly: /usr/local/bin/menu"
+        echo "  4. Check for errors: bash -n /usr/local/bin/menu"
         exit 1
     fi
 else
