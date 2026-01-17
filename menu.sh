@@ -4877,9 +4877,10 @@ show_banner() {
     local total_users=0
     if [[ -s "$DB_FILE" ]]; then total_users=$(grep -c . "$DB_FILE"); fi
 
+    # Clear screen once and display stable banner
     clear
     echo
-    # Modern ASCII Art Banner with Colors - Centered
+    # Modern ASCII Art Banner with Colors - Fixed Width
     echo -e "${C_BRIGHT_CYAN}${C_BOLD}"
     echo -e "    ███╗   ███╗██████╗  ██████╗██╗   ██╗███████╗██████╗ ██████╗ "
     echo -e "    ████╗ ████║██╔══██╗██╔════╝╚██╗ ██╔╝██╔════╝██╔══██╗╚════██╗"
@@ -4888,14 +4889,14 @@ show_banner() {
     echo -e "    ██║ ╚═╝ ██║██║  ██║╚██████╗   ██║   ███████╗██║  ██║███████╗"
     echo -e "    ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝"
     echo -e "${C_RESET}"
-    # Title Box with better spacing
+    # Title Box - Fixed Width Frame
     echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
     echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ║${C_RESET}${C_BRIGHT_CYAN}${C_BOLD}                    ✨ ${REPO_NAME} Manager ✨                    ${C_RESET}${C_BRIGHT_MAGENTA}${C_BOLD}║${C_RESET}"
     echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ║${C_RESET}${C_BRIGHT_YELLOW}                      v3.4.0 (ActiveLimiter)                      ${C_RESET}${C_BRIGHT_MAGENTA}${C_BOLD}║${C_RESET}"
     echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
     echo
     
-    # System Information Box with Better Colors
+    # System Information Box - Clean Fixed Frame
     echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}${C_BOLD}    ┌─────────────────────────────────────────────────────────────────────┐${C_RESET}"
     echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_BRIGHT_CYAN}${C_BOLD}  📊 System Information${C_BRIGHT_WHITE}                                         │${C_RESET}"
     echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}    ├─────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -4923,8 +4924,6 @@ show_banner() {
     
     echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}    └─────────────────────────────────────────────────────────────────────┘${C_RESET}"
     echo
-    # Add spacing line for better visual separation
-    echo -e "${C_DIM}                                                                               ${C_RESET}"
 }
 
 protocol_menu() {
@@ -5266,9 +5265,9 @@ main_menu() {
         export UNINSTALL_MODE="interactive"
         show_banner
         
-        # User Management Section with Modern Box Design
+        # User Management Section - Stable Fixed Frame
         echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
-        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ║${C_BRIGHT_CYAN}${C_BOLD}  👤 USER MANAGEMENT${C_BRIGHT_MAGENTA}                                                    ║${C_RESET}"
+        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_CYAN}${C_BOLD}👤 USER MANAGEMENT${C_RESET}${C_BRIGHT_MAGENTA}                                                    ║${C_RESET}"
         echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
         printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}1${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}✨ Create New User${C_RESET}                        ${C_BRIGHT_GREEN}${C_BOLD}5${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔓 Unlock User Account${C_RESET}            ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
         printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}2${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Delete User${C_RESET}                          ${C_BRIGHT_GREEN}${C_BOLD}6${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}📋 List All Managed Users${C_RESET}         ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
@@ -5276,13 +5275,10 @@ main_menu() {
         printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}4${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔒 Lock User Account${C_RESET}                                                          ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
         echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
-        # Spacing line between sections
-        echo -e "${C_DIM}                                                                               ${C_RESET}"
-        echo
         
-        # System Utilities Section with Modern Box Design
+        # System Utilities Section - Stable Fixed Frame
         echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
-        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_BRIGHT_MAGENTA}${C_BOLD}  ⚙️  SYSTEM UTILITIES${C_BRIGHT_CYAN}                                                    ║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_MAGENTA}${C_BOLD}⚙️  SYSTEM UTILITIES${C_RESET}${C_BRIGHT_CYAN}                                                    ║${C_RESET}"
         echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
         printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}8${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔌 Install Protocols & Panels${C_RESET}              ${C_BRIGHT_GREEN}${C_BOLD}9${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}💾 Backup User Data${C_RESET}              ${C_BRIGHT_CYAN}║${C_RESET}\n"
         printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}10${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}📥 Restore User Data${C_RESET}                    ${C_BRIGHT_GREEN}${C_BOLD}11${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🎨 SSH Banner Management${C_RESET}         ${C_BRIGHT_CYAN}║${C_RESET}\n"
@@ -5290,21 +5286,16 @@ main_menu() {
         printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}14${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}📊 VPN Status & Auto-Config${C_RESET}              ${C_BRIGHT_GREEN}${C_BOLD}15${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔥 Network Optimization${C_RESET}           ${C_BRIGHT_CYAN}║${C_RESET}\n"
         echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
-        # Spacing line between sections
-        echo -e "${C_DIM}                                                                               ${C_RESET}"
-        echo
         
-        # Danger Zone Section with Red Border - Properly centered
-        echo -e "${C_BRIGHT_RED}${C_BOLD}${C_BLINK}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
-        echo -e "${C_BRIGHT_RED}${C_BOLD}    ║${C_RESET}${C_BRIGHT_YELLOW}${C_BOLD}               ⚠️  DANGER ZONE - Use with Caution! ⚠️               ${C_RESET}${C_BRIGHT_RED}${C_BOLD}║${C_RESET}"
+        # Danger Zone Section - Stable Fixed Frame (removed blink for stability)
+        echo -e "${C_BRIGHT_RED}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_BRIGHT_RED}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}⚠️  DANGER ZONE - Use with Caution! ⚠️${C_RESET}${C_BRIGHT_RED}                                 ║${C_RESET}"
         echo -e "${C_BRIGHT_RED}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
         printf "${C_BRIGHT_RED}    ║${C_RESET}  ${C_BRIGHT_RED}${C_BOLD}99${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_RED}${C_BOLD}💥 Uninstall Script${C_RESET}                                    ${C_BRIGHT_GREEN}${C_BOLD}0${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_CYAN}${C_BOLD}🚪 Exit${C_RESET}              ${C_BRIGHT_RED}║${C_RESET}\n"
         echo -e "${C_BRIGHT_RED}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
         
-        # Prompt with better styling - Clean aligned input box outside all content boxes
-        echo -e "${C_DIM}                                                                               ${C_RESET}"
-        echo
+        # Input Prompt - Clean Stable Frame
         echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
         echo -e -n "${C_BRIGHT_YELLOW}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}👉${C_RESET} ${C_BRIGHT_CYAN}${C_BOLD}Select an option:${C_RESET} ${C_BRIGHT_WHITE}"
         read -r choice
