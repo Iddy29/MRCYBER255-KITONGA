@@ -5424,9 +5424,11 @@ main_menu() {
     done
 }
 
+# Handle command line arguments
 if [[ "$1" == "--install-setup" ]]; then
     initial_setup
     exit 0
 fi
 
+# Main entry point - start the menu
 main_menu
