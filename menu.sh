@@ -1555,7 +1555,9 @@ check_dnstt_diagnostics() {
     dns_udp=$(sudo ss -lunp 2>/dev/null | grep -E ':53\s' || true)
     if [[ -n "$dns_udp" ]]; then
         echo -e "${C_GREEN}  ✅ DNS UDP:53 is listening${C_RESET}"
-        echo -e "${C_DIM}  $dns_udp${C_RESET}" | head -n1 | sed 's/^/    /'
+        local first_line
+        first_line=$(echo "$dns_udp" | head -n1)
+        echo -e "${C_DIM}    $first_line${C_RESET}"
     else
         echo -e "${C_YELLOW}  ⚠️  [WARN] nothing on udp:53${C_RESET}"
     fi
@@ -1565,7 +1567,9 @@ check_dnstt_diagnostics() {
     dns_tcp=$(sudo ss -lntp 2>/dev/null | grep -E ':53\s' || true)
     if [[ -n "$dns_tcp" ]]; then
         echo -e "${C_GREEN}  ✅ DNS TCP:53 is listening${C_RESET}"
-        echo -e "${C_DIM}  $dns_tcp${C_RESET}" | head -n1 | sed 's/^/    /'
+        local first_line_tcp
+        first_line_tcp=$(echo "$dns_tcp" | head -n1)
+        echo -e "${C_DIM}    $first_line_tcp${C_RESET}"
     else
         echo -e "${C_DIM}  (TCP:53 not required for DNSTT)${C_RESET}"
     fi
@@ -1576,7 +1580,9 @@ check_dnstt_diagnostics() {
     dnstt_listen=$(sudo ss -lunp 2>/dev/null | grep -E ':5300\s' || true)
     if [[ -n "$dnstt_listen" ]]; then
         echo -e "${C_GREEN}  ✅ DNSTT UDP:5300 is listening${C_RESET}"
-        echo -e "${C_DIM}  $dnstt_listen${C_RESET}" | head -n1 | sed 's/^/    /'
+        local first_line_dnstt
+        first_line_dnstt=$(echo "$dnstt_listen" | head -n1)
+        echo -e "${C_DIM}    $first_line_dnstt${C_RESET}"
     else
         echo -e "${C_RED}  ❌ [FAIL] dnstt-server not listening on udp:5300${C_RESET}"
     fi
@@ -1587,7 +1593,9 @@ check_dnstt_diagnostics() {
     ssh_listen=$(sudo ss -lntp 2>/dev/null | grep -E ':22\s' || true)
     if [[ -n "$ssh_listen" ]]; then
         echo -e "${C_GREEN}  ✅ SSH TCP:22 is listening${C_RESET}"
-        echo -e "${C_DIM}  $ssh_listen${C_RESET}" | head -n1 | sed 's/^/    /'
+        local first_line_ssh
+        first_line_ssh=$(echo "$ssh_listen" | head -n1)
+        echo -e "${C_DIM}    $first_line_ssh${C_RESET}"
     else
         echo -e "${C_RED}  ❌ [FAIL] sshd not listening on tcp:22${C_RESET}"
     fi
