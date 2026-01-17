@@ -1969,7 +1969,7 @@ install_dnstt() {
     # Use /root/dnstt/ as keys directory (as specified)
     DNSTT_KEYS_DIR="/root/dnstt"
     
-    # Copy binary to /root/dnstt/ for service file
+    # Copy binary to /root/dnstt/ for service file and ensure keys directory exists
     mkdir -p "$DNSTT_KEYS_DIR" || {
         echo -e "${C_RED}❌ Failed to create keys directory.${C_RESET}"
         return 1
