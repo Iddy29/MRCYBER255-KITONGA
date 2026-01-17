@@ -1533,7 +1533,9 @@ check_dnstt_diagnostics() {
     
     local ns_result
     ns_result=$(dig +short NS "$SUB" 2>/dev/null || true)
-    if echo "$ns_result" | grep -qx "$EXPECTED"; then
+    
+    # Check if expected NS is in the result (handle multiple NS records)
+    if echo "$ns_result" | grep -q "^${EXPECTED}$"; then
         echo -e "${C_GREEN}  ✅ [OK] NS condition met: $SUB -> $EXPECTED${C_RESET}"
     else
         echo -e "${C_YELLOW}  ⚠️  [WARN] NS not matching yet. Current:${C_RESET}"
@@ -1550,7 +1552,7 @@ check_dnstt_diagnostics() {
     echo -e "${C_BOLD}${C_CYAN}[2] Checking Listening Ports${C_RESET}"
     
     # Check DNS port 53 (UDP)
-    echo -e "${C_DIM}  DNS :53/udp (authoritative resolver)${C_RESET}"
+    echo -e "${C_DIM}  DNS :53/udp or tcp (authoritative resolver)${C_RESET}"
     local dns_udp
     dns_udp=$(sudo ss -lunp 2>/dev/null | grep -E ':53\s' || true)
     if [[ -n "$dns_udp" ]]; then
@@ -1571,7 +1573,7 @@ check_dnstt_diagnostics() {
         first_line_tcp=$(echo "$dns_tcp" | head -n1)
         echo -e "${C_DIM}    $first_line_tcp${C_RESET}"
     else
-        echo -e "${C_DIM}  (TCP:53 not required for DNSTT)${C_RESET}"
+        echo -e "${C_YELLOW}  ⚠️  [WARN] nothing on tcp:53${C_RESET}"
     fi
     
     # Check DNSTT port 5300 (UDP)
