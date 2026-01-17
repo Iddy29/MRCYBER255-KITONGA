@@ -1535,7 +1535,7 @@ check_dnstt_diagnostics() {
     ns_result=$(dig +short NS "$SUB" 2>/dev/null || true)
     
     # Check if expected NS is in the result (handle multiple NS records)
-    if echo "$ns_result" | grep -q "^${EXPECTED}$"; then
+    if echo "$ns_result" | grep -qxF "$EXPECTED"; then
         echo -e "${C_GREEN}  ✅ [OK] NS condition met: $SUB -> $EXPECTED${C_RESET}"
     else
         echo -e "${C_YELLOW}  ⚠️  [WARN] NS not matching yet. Current:${C_RESET}"
