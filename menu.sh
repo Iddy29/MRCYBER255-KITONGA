@@ -1928,9 +1928,45 @@ install_dnstt() {
     local TUNNEL_SUBDOMAIN=""
     local HAS_IPV6="false"
 
-    # Use fixed configuration: domain idd.voltrontechtx.shop (domain input still collected for config file)
-    read -p "👉 Enter your full nameserver domain (e.g., ns1.yourdomain.com): " NS_DOMAIN
+    # Get server IP for nameserver configuration
+    local server_ip=$(hostname -I | awk '{print $1}' | head -n1)
+    
+    echo -e "${C_BLUE}📋 DNSTT Nameserver Configuration${C_RESET}"
+    echo -e "${C_YELLOW}💡 Important: The nameserver subdomain must point to your VPS IP via NS record${C_RESET}"
+    echo -e "${C_DIM}   Example: In your DNS provider, create NS record:${C_RESET}"
+    echo -e "${C_DIM}   - NS Record: ns1.yourdomain.com → points to your VPS subdomain${C_RESET}"
+    echo -e "${C_DIM}   - A Record: ns1.yourdomain.com → points to VPS IP: ${server_ip}${C_RESET}"
+    echo -e "${C_DIM}   This allows clients to use ns1.yourdomain.com as their DNS server${C_RESET}"
+    echo ""
+    
+    read -p "👉 Enter your full nameserver domain (e.g., ns1.yourdomain.com or subdomain.ns1.yourdomain.com): " NS_DOMAIN
     if [[ -z "$NS_DOMAIN" ]]; then echo -e "\n${C_RED}❌ Nameserver domain cannot be empty. Aborting.${C_RESET}"; return; fi
+    
+    # Verify nameserver domain points to this server
+    echo -e "\n${C_BLUE}🔍 Verifying nameserver domain configuration...${C_RESET}"
+    local ns_resolved_ip=$(dig +short "$NS_DOMAIN" @8.8.8.8 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+    if [[ -n "$ns_resolved_ip" ]]; then
+        if [[ "$ns_resolved_ip" == "$server_ip" ]]; then
+            echo -e "${C_GREEN}✅ Nameserver domain $NS_DOMAIN correctly points to this server ($server_ip)${C_RESET}"
+        else
+            echo -e "${C_YELLOW}⚠️  Warning: Nameserver domain $NS_DOMAIN resolves to $ns_resolved_ip, but server IP is $server_ip${C_RESET}"
+            echo -e "${C_YELLOW}   Make sure the NS record and A record are correctly configured in your DNS provider${C_RESET}"
+            read -p "👉 Continue anyway? (y/n): " continue_confirm
+            if [[ "$continue_confirm" != "y" && "$continue_confirm" != "Y" ]]; then
+                echo -e "${C_YELLOW}Installation cancelled. Please configure DNS correctly and try again.${C_RESET}"
+                return
+            fi
+        fi
+    else
+        echo -e "${C_YELLOW}⚠️  Warning: Could not resolve nameserver domain $NS_DOMAIN${C_RESET}"
+        echo -e "${C_YELLOW}   DNS propagation may take time. Ensure NS and A records are configured correctly.${C_RESET}"
+        read -p "👉 Continue anyway? (y/n): " continue_confirm
+        if [[ "$continue_confirm" != "y" && "$continue_confirm" != "Y" ]]; then
+            echo -e "${C_YELLOW}Installation cancelled. Please configure DNS correctly and try again.${C_RESET}"
+            return
+        fi
+    fi
+    
     # Fixed tunnel domain: idd.voltrontechtx.shop
     TUNNEL_DOMAIN="idd.voltrontechtx.shop"
     echo -e "${C_GREEN}ℹ️ Using fixed tunnel domain: $TUNNEL_DOMAIN${C_RESET}"
@@ -2365,15 +2401,40 @@ EDNSPROXY
     fi
     
     echo -e "\n${C_BLUE}📝 Creating DNSTT systemd service (port 5300)...${C_RESET}"
+    # Determine which binary path to use (prefer /root/dnstt/dnstt-server, fallback to /usr/local/bin/dnstt-server)
+    local dnstt_exec_path="/root/dnstt/dnstt-server"
+    if [[ ! -f "$dnstt_exec_path" ]]; then
+        dnstt_exec_path="/usr/local/bin/dnstt-server"
+        if [[ ! -f "$dnstt_exec_path" ]]; then
+            echo -e "${C_RED}❌ DNSTT binary not found at either location.${C_RESET}"
+            return 1
+        fi
+        echo -e "${C_YELLOW}ℹ️ Using DNSTT binary at: $dnstt_exec_path${C_RESET}"
+    else
+        echo -e "${C_GREEN}ℹ️ Using DNSTT binary at: $dnstt_exec_path${C_RESET}"
+    fi
+    
+    # Verify key file exists
+    if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]]; then
+        echo -e "${C_RED}❌ DNSTT private key not found at: $DNSTT_KEYS_DIR/server.key${C_RESET}"
+        return 1
+    fi
+    
     # Use fixed configuration: MTU 512, domain idd.voltrontechtx.shop, forward to 127.0.0.1:22
     cat > "$DNSTT_SERVICE_FILE" <<-EOF
 [Unit]
+Description=DNSTT Server (DNS Tunnel)
 After=network.target
+Wants=network-online.target
 
 [Service]
-ExecStart=/root/dnstt/dnstt-server -udp :5300 -mtu 512 -privkey-file /root/dnstt/server.key idd.voltrontechtx.shop 127.0.0.1:22
+Type=simple
+ExecStart=$dnstt_exec_path -udp :5300 -mtu 512 -privkey-file /root/dnstt/server.key idd.voltrontechtx.shop 127.0.0.1:22
 Restart=always
 RestartSec=3
+RestartPreventExitStatus=0
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -4923,6 +4984,14 @@ show_banner() {
     fi
     
     echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}    └─────────────────────────────────────────────────────────────────────┘${C_RESET}"
+    
+    # Display script location
+    local script_path=$(readlink -f "$(command -v menu)" 2>/dev/null || echo "/usr/local/bin/menu")
+    if [[ -f "$script_path" ]]; then
+        local script_size=$(du -h "$script_path" 2>/dev/null | cut -f1 || echo "N/A")
+        echo
+        echo -e "${C_DIM}${C_ITALIC}    📁 Script Location: ${C_YELLOW}$script_path${C_RESET}${C_DIM}${C_ITALIC} (Size: ${script_size})${C_RESET}"
+    fi
     echo
 }
 
@@ -5247,7 +5316,7 @@ uninstall_script() {
 press_enter() {
     echo
     echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
-    echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_CYAN}${C_BOLD}Press ${C_BRIGHT_GREEN}${C_BOLD}[Enter]${C_RESET}${C_BRIGHT_CYAN}${C_BOLD} to return to the menu...${C_RESET}${C_BRIGHT_YELLOW}                                                       ║${C_RESET}"
+    echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_CYAN}${C_BOLD}Press ${C_BRIGHT_GREEN}${C_BOLD}[Enter]${C_RESET}${C_BRIGHT_CYAN}${C_BOLD} to return to the menu...${C_RESET}${C_BRIGHT_YELLOW}                                  ║${C_RESET}"
     echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
     read -r
 }
