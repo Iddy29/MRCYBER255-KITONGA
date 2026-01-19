@@ -171,10 +171,88 @@ done
 _is_valid_ipv4() {
     local ip=$1
     if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        IFS='.' read -ra ADDR <<< "$ip"
+        for i in "${ADDR[@]}"; do
+            if ((i > 255)); then
+                return 1
+            fi
+        done
         return 0
     else
         return 1
     fi
+}
+
+# Function to detect VPS server IP address
+_detect_server_ip() {
+    local server_ip=""
+    
+    # Try multiple methods to detect server IP
+    if command -v hostname &> /dev/null; then
+        server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' | head -n1)
+    fi
+    
+    if [[ -z "$server_ip" ]] && command -v ip &> /dev/null; then
+        server_ip=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+' | head -n1)
+    fi
+    
+    if [[ -z "$server_ip" ]] && command -v ifconfig &> /dev/null; then
+        server_ip=$(ifconfig 2>/dev/null | grep -oP 'inet \K[0-9.]+' | grep -v '127.0.0.1' | head -n1)
+    fi
+    
+    if [[ -z "$server_ip" ]]; then
+        server_ip=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "")
+    fi
+    
+    echo "$server_ip"
+}
+
+# Function to detect VPS hostname
+_detect_server_hostname() {
+    local hostname=""
+    
+    # Try hostname command
+    if command -v hostname &> /dev/null; then
+        hostname=$(hostname -f 2>/dev/null || hostname 2>/dev/null)
+    fi
+    
+    # Fallback to /etc/hostname
+    if [[ -z "$hostname" ]] && [[ -f /etc/hostname ]]; then
+        hostname=$(cat /etc/hostname 2>/dev/null | tr -d '\n\r' | head -n1)
+    fi
+    
+    echo "$hostname"
+}
+
+# Function to validate nameserver domain format (must be hostname, not IP)
+_validate_nameserver_domain() {
+    local ns_domain=$1
+    
+    if [[ -z "$ns_domain" ]]; then
+        echo "ERROR: Nameserver domain cannot be empty"
+        return 1
+    fi
+    
+    # Check if it's an IP address (wrong format)
+    if _is_valid_ipv4 "$ns_domain"; then
+        echo "ERROR: NS records MUST point to hostnames, not IP addresses!"
+        echo "You provided: $ns_domain (this is an IP address)"
+        echo "Solution: NS records must point to a hostname (e.g., ns1.yourdomain.com)"
+        echo "The hostname will have an A record pointing to your VPS IP address"
+        return 1
+    fi
+    
+    # Check if it looks like a valid hostname
+    if [[ ! "$ns_domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$ ]]; then
+        echo "WARNING: '$ns_domain' doesn't look like a valid hostname format"
+        echo "Expected format: ns1.yourdomain.com"
+        read -p "Continue anyway? (y/n): " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            return 1
+        fi
+    fi
+    
+    return 0
 }
 
 check_and_open_firewall_port() {
@@ -1439,10 +1517,23 @@ show_dnstt_details() {
         echo -e "${C_BOLD}${C_RED}  ⚠️ CRITICAL: CLIENT DNS CONFIGURATION${C_RESET}"
         echo -e "${C_BOLD}${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
         if [[ -n "$NS_DOMAIN" ]]; then
+            # Get VPS IP for display
+            local vps_ip
+            vps_ip=$(_detect_server_ip)
+            
             echo -e "  ${C_RED}❌ DO NOT USE: 8.8.8.8 or any public DNS${C_RESET}"
             echo -e "  ${C_GREEN}✅ USE INSTEAD: ${C_YELLOW}$NS_DOMAIN${C_RESET} ${C_DIM}(or its IP address)${C_RESET}"
-            echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}The nameserver domain ($NS_DOMAIN) must point to this server's IP address${C_RESET}"
-            echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Configure your client DNS to use: ${C_YELLOW}$NS_DOMAIN${C_RESET} ${C_WHITE}or its IP${C_RESET}"
+            echo ""
+            echo -e "  ${C_BOLD}${C_YELLOW}📋 REQUIRED DNS RECORDS:${C_RESET}"
+            if [[ -n "$vps_ip" ]]; then
+                echo -e "    ${C_GREEN}A Record:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}$vps_ip${C_RESET}"
+                echo -e "    ${C_YELLOW}💡${C_RESET} ${C_WHITE}Ensure this A record exists at your DNS provider${C_RESET}"
+            else
+                echo -e "    ${C_GREEN}A Record:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}[Your VPS IP Address]${C_RESET}"
+                echo -e "    ${C_YELLOW}💡${C_RESET} ${C_WHITE}Create this A record at your DNS provider${C_RESET}"
+            fi
+            echo ""
+            echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}After creating the A record, configure your client DNS to use: ${C_YELLOW}$NS_DOMAIN${C_RESET}"
         else
             echo -e "  ${C_RED}❌ DO NOT USE: 8.8.8.8 or any public DNS${C_RESET}"
             echo -e "  ${C_YELLOW}⚠️${C_RESET} ${C_WHITE}Nameserver domain not configured. Please reconfigure DNSTT.${C_RESET}"
@@ -1995,15 +2086,18 @@ install_dnstt() {
     # Mask systemd-resolved to prevent any automatic start
     systemctl mask systemd-resolved 2>/dev/null
     
-    # Handle resolv.conf
+    # Handle resolv.conf - Use 127.0.0.1 for DNSTT to work properly
+    # The EDNS proxy on port 53 will forward regular DNS queries to external DNS servers
     chattr -i /etc/resolv.conf 2>/dev/null
     if [ -L /etc/resolv.conf ]; then
         rm -f /etc/resolv.conf
     fi
     rm -f /etc/resolv.conf
-    echo "nameserver $DNS_PRIMARY" > /etc/resolv.conf
+    echo "nameserver 127.0.0.1" > /etc/resolv.conf
+    echo "nameserver $DNS_PRIMARY" >> /etc/resolv.conf
     echo "nameserver $DNS_SECONDARY" >> /etc/resolv.conf
     chattr +i /etc/resolv.conf 2>/dev/null
+    echo -e "${C_GREEN}✅ Configured /etc/resolv.conf to use localhost (127.0.0.1) for DNS forwarding${C_RESET}"
     
     # Kill any remaining systemd-resolved processes
     pkill -9 systemd-resolved 2>/dev/null
@@ -2028,12 +2122,14 @@ install_dnstt() {
                 echo -e "${C_GREEN}⚙️ Stopping and disabling systemd-resolved to free port 53...${C_RESET}"
                 systemctl stop systemd-resolved
                 systemctl disable systemd-resolved
+                systemctl mask systemd-resolved 2>/dev/null
                 chattr -i /etc/resolv.conf &>/dev/null
                 rm -f /etc/resolv.conf
-                echo "nameserver $DNS_PRIMARY" > /etc/resolv.conf
+                echo "nameserver 127.0.0.1" > /etc/resolv.conf
+                echo "nameserver $DNS_PRIMARY" >> /etc/resolv.conf
                 echo "nameserver $DNS_SECONDARY" >> /etc/resolv.conf
                 chattr +i /etc/resolv.conf
-                echo -e "${C_GREEN}✅ Port 53 has been freed and DNS set to 8.8.8.8.${C_RESET}"
+                echo -e "${C_GREEN}✅ Port 53 has been freed and DNS configured for DNSTT (127.0.0.1).${C_RESET}"
             else
                 echo -e "${C_RED}❌ Cannot proceed without freeing port 53. Aborting.${C_RESET}"
                 return
@@ -2070,13 +2166,71 @@ install_dnstt() {
     local HAS_IPV6="false"
 
     echo -e "${C_BLUE}📋 DNSTT Nameserver Configuration${C_RESET}"
-    echo -e "${C_YELLOW}💡 Note: The nameserver domain is managed by the parent domain you'll configure later${C_RESET}"
+    echo -e "${C_YELLOW}💡 Understanding DNS Records: NS records must point to HOSTNAMES, not IP addresses${C_RESET}"
     echo ""
     
-    read -p "👉 Enter your full nameserver domain (e.g., ns1.yourdomain.com or subdomain.ns1.yourdomain.com): " NS_DOMAIN
-    if [[ -z "$NS_DOMAIN" ]]; then echo -e "\n${C_RED}❌ Nameserver domain cannot be empty. Aborting.${C_RESET}"; return; fi
+    # Detect VPS information
+    local vps_ip
+    local vps_hostname
+    vps_ip=$(_detect_server_ip)
+    vps_hostname=$(_detect_server_hostname)
     
-    echo -e "${C_GREEN}✅ Nameserver domain registered: $NS_DOMAIN${C_RESET}"
+    echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_CYAN}  📡 VPS SERVER INFORMATION${C_RESET}"
+    echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    if [[ -n "$vps_hostname" ]]; then
+        echo -e "  ${C_GREEN}Hostname:${C_RESET} ${C_YELLOW}$vps_hostname${C_RESET}"
+    fi
+    if [[ -n "$vps_ip" ]]; then
+        echo -e "  ${C_GREEN}IP Address:${C_RESET} ${C_YELLOW}$vps_ip${C_RESET}"
+    else
+        echo -e "  ${C_YELLOW}⚠️${C_RESET} ${C_RED}Could not detect server IP address${C_RESET}"
+    fi
+    echo ""
+    
+    echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_YELLOW}  📝 DNS CONFIGURATION REQUIREMENTS${C_RESET}"
+    echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "  ${C_WHITE}1.${C_RESET} You need to create a ${C_GREEN}HOSTNAME${C_RESET} (e.g., ns1.yourdomain.com)"
+    echo -e "  ${C_WHITE}2.${C_RESET} Create an ${C_GREEN}A record${C_RESET}: ${C_YELLOW}ns1.yourdomain.com → $vps_ip${C_RESET}"
+    echo -e "  ${C_WHITE}3.${C_RESET} Point your ${C_GREEN}NS record${C_RESET} to that hostname"
+    echo -e "  ${C_RED}❌${C_RESET} ${C_RED}WRONG: NS record pointing directly to IP address${C_RESET}"
+    echo -e "  ${C_GREEN}✅${C_RESET} ${C_GREEN}CORRECT: NS record pointing to hostname (which has A record → IP)${C_RESET}"
+    echo ""
+    
+    local ns_domain_valid=false
+    while [[ "$ns_domain_valid" == "false" ]]; do
+        read -p "👉 Enter your nameserver HOSTNAME (e.g., ns1.yourdomain.com, NOT an IP): " NS_DOMAIN
+        
+        # Validate the nameserver domain
+        local validation_result
+        validation_result=$(_validate_nameserver_domain "$NS_DOMAIN" 2>&1)
+        
+        if [[ $? -eq 0 ]]; then
+            ns_domain_valid=true
+            echo -e "${C_GREEN}✅ Nameserver hostname validated: $NS_DOMAIN${C_RESET}"
+            
+            # Show what DNS records need to be created
+            echo ""
+            echo -e "${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_BOLD}${C_GREEN}  ✅ REQUIRED DNS RECORDS TO CREATE${C_RESET}"
+            echo -e "${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            if [[ -n "$vps_ip" ]]; then
+                echo -e "  ${C_GREEN}A Record:${C_RESET}"
+                echo -e "    ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}$vps_ip${C_RESET}"
+                echo ""
+                echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}After creating the A record above, configure your domain's NS record to point to:${C_RESET}"
+                echo -e "    ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+            else
+                echo -e "  ${C_YELLOW}⚠️${C_RESET} ${C_RED}Could not detect VPS IP. You need to manually create:${C_RESET}"
+                echo -e "    ${C_GREEN}A Record:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}[Your VPS IP Address]${C_RESET}"
+            fi
+        else
+            echo -e "${C_RED}❌ Validation failed:${C_RESET}"
+            echo -e "${C_RED}$validation_result${C_RESET}"
+            echo ""
+        fi
+    done
     
     # Fixed tunnel domain: idd.voltrontechtx.shop
     TUNNEL_DOMAIN="idd.voltrontechtx.shop"
@@ -2405,12 +2559,12 @@ def handle_request(server_sock: socket.socket, data: bytes, client_addr):
         if is_tunnel_query:
             # Forward to DNSTT server with EDNS size patching
             upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            upstream_sock.settimeout(10.0)
+            upstream_sock.settimeout(30.0)  # Increased timeout for better reliability
             
             upstream_data = patch_edns_udp_size(data, INTERNAL_EDNS_SIZE)
             upstream_sock.sendto(upstream_data, (UPSTREAM_HOST, UPSTREAM_PORT))
 
-            resp, _ = upstream_sock.recvfrom(4096)
+            resp, _ = upstream_sock.recvfrom(8192)  # Increased buffer size for larger responses
             if resp:
                 resp_patched = patch_edns_udp_size(resp, EXTERNAL_EDNS_SIZE)
                 server_sock.sendto(resp_patched, client_addr)
@@ -2423,9 +2577,9 @@ def handle_request(server_sock: socket.socket, data: bytes, client_addr):
                 # If all external DNS servers fail, try DNSTT as fallback
                 try:
                     upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    upstream_sock.settimeout(5.0)
+                    upstream_sock.settimeout(10.0)  # Increased timeout for fallback
                     upstream_sock.sendto(data, (UPSTREAM_HOST, UPSTREAM_PORT))
-                    resp, _ = upstream_sock.recvfrom(4096)
+                    resp, _ = upstream_sock.recvfrom(8192)  # Increased buffer size
                     if resp:
                         server_sock.sendto(resp, client_addr)
                 except:
@@ -3902,6 +4056,154 @@ BBR_EOF
     cat /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null | tr ' ' '\n' | sed 's/^/    - /' || echo "    (Unable to read)"
 }
 
+configure_ipv6() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🌐 IPv6 Configuration ---${C_RESET}"
+    echo ""
+    
+    # Check current IPv6 status
+    local ipv6_currently_enabled=false
+    if sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | grep -q "= 0"; then
+        ipv6_currently_enabled=true
+    fi
+    
+    if [[ "$ipv6_currently_enabled" == "true" ]]; then
+        echo -e "${C_GREEN}✅ IPv6 is currently ENABLED on this VPS${C_RESET}"
+        echo ""
+        read -p "👉 Do you want to disable IPv6? (yes/no): " disable_ipv6
+        if [[ "$disable_ipv6" == "yes" ]]; then
+            echo -e "\n${C_BLUE}🔧 Disabling IPv6...${C_RESET}"
+            
+            # Disable IPv6 in sysctl
+            if ! grep -q "^net.ipv6.conf.all.disable_ipv6 = 1" /etc/sysctl.conf 2>/dev/null; then
+                sed -i '/^net.ipv6.conf.all.disable_ipv6/d' /etc/sysctl.conf
+                sed -i '/^#.*IPv6/d' /etc/sysctl.conf
+                echo "" >> /etc/sysctl.conf
+                echo "# IPv6 Configuration (Disabled by MRCYBER255-KITONGA Manager)" >> /etc/sysctl.conf
+                echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
+                echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
+                echo "net.ipv6.conf.lo.disable_ipv6 = 1" >> /etc/sysctl.conf
+            fi
+            
+            # Apply changes
+            sysctl -p >/dev/null 2>&1
+            
+            echo -e "${C_GREEN}✅ IPv6 has been disabled successfully${C_RESET}"
+            echo -e "${C_YELLOW}💡 Changes will persist across reboots${C_RESET}"
+            return 0
+        else
+            echo -e "${C_YELLOW}ℹ️ IPv6 configuration unchanged${C_RESET}"
+            return 0
+        fi
+    else
+        echo -e "${C_YELLOW}ℹ️ IPv6 is currently DISABLED on this VPS${C_RESET}"
+        echo ""
+        read -p "👉 Do you want to enable IPv6 on this VPS? (yes/no): " enable_ipv6
+        
+        if [[ "$enable_ipv6" == "yes" ]]; then
+            echo -e "\n${C_BLUE}🔧 Enabling IPv6...${C_RESET}"
+            
+            # Enable IPv6 in sysctl
+            if ! grep -q "^net.ipv6.conf.all.disable_ipv6 = 0" /etc/sysctl.conf 2>/dev/null; then
+                sed -i '/^net.ipv6.conf.all.disable_ipv6/d' /etc/sysctl.conf
+                sed -i '/^#.*IPv6/d' /etc/sysctl.conf
+                echo "" >> /etc/sysctl.conf
+                echo "# IPv6 Configuration (Enabled by MRCYBER255-KITONGA Manager)" >> /etc/sysctl.conf
+                echo "net.ipv6.conf.all.disable_ipv6 = 0" >> /etc/sysctl.conf
+                echo "net.ipv6.conf.default.disable_ipv6 = 0" >> /etc/sysctl.conf
+                echo "net.ipv6.conf.lo.disable_ipv6 = 0" >> /etc/sysctl.conf
+            fi
+            
+            # Apply changes
+            sysctl -p >/dev/null 2>&1
+            
+            # Detect network interface
+            local network_interface=""
+            if command -v ip &> /dev/null; then
+                network_interface=$(ip route | grep default | awk '{print $5}' | head -n1)
+            elif command -v route &> /dev/null; then
+                network_interface=$(route -n | grep '^0.0.0.0' | awk '{print $8}' | head -n1)
+            else
+                # Try common interface names
+                for iface in eth0 ens3 ens33 enp0s3; do
+                    if ip link show "$iface" &>/dev/null; then
+                        network_interface="$iface"
+                        break
+                    fi
+                done
+            fi
+            
+            if [[ -z "$network_interface" ]]; then
+                echo -e "${C_YELLOW}⚠️ Could not automatically detect network interface${C_RESET}"
+                read -p "👉 Enter your network interface name (e.g., eth0, ens3): " network_interface
+            fi
+            
+            if [[ -n "$network_interface" ]] && ip link show "$network_interface" &>/dev/null; then
+                echo -e "${C_GREEN}✅ Detected network interface: $network_interface${C_RESET}"
+                
+                # Check if IPv6 address already exists
+                if ip -6 addr show dev "$network_interface" 2>/dev/null | grep -q "inet6"; then
+                    echo -e "${C_GREEN}✅ IPv6 address already configured on $network_interface${C_RESET}"
+                else
+                    echo -e "${C_YELLOW}⚠️ No IPv6 address found on $network_interface${C_RESET}"
+                    read -p "👉 Do you have an IPv6 address to configure? (yes/no): " has_ipv6_addr
+                    
+                    if [[ "$has_ipv6_addr" == "yes" ]]; then
+                        read -p "👉 Enter your IPv6 address (e.g., 2001:db8::1/64): " ipv6_address
+                        if [[ -n "$ipv6_address" ]]; then
+                            if ip -6 addr add "$ipv6_address" dev "$network_interface" 2>/dev/null; then
+                                echo -e "${C_GREEN}✅ IPv6 address configured: $ipv6_address${C_RESET}"
+                            else
+                                echo -e "${C_YELLOW}⚠️ Failed to add IPv6 address. You may need to configure it manually.${C_RESET}"
+                            fi
+                        fi
+                    else
+                        echo -e "${C_YELLOW}ℹ️ IPv6 is enabled but no address configured. Configure it manually or through your VPS provider.${C_RESET}"
+                    fi
+                fi
+            else
+                echo -e "${C_YELLOW}⚠️ Network interface '$network_interface' not found. IPv6 enabled in sysctl but interface configuration skipped.${C_RESET}"
+            fi
+            
+            # Configure IPv6 firewall if ip6tables is available
+            if command -v ip6tables &> /dev/null; then
+                echo -e "\n${C_BLUE}🔧 Configuring IPv6 firewall (ip6tables)...${C_RESET}"
+                ip6tables -P INPUT ACCEPT 2>/dev/null
+                ip6tables -P FORWARD ACCEPT 2>/dev/null
+                ip6tables -P OUTPUT ACCEPT 2>/dev/null
+                echo -e "${C_GREEN}✅ IPv6 firewall rules configured (allowing all traffic)${C_RESET}"
+                echo -e "${C_YELLOW}💡 You may want to configure more restrictive rules later${C_RESET}"
+            else
+                echo -e "${C_YELLOW}ℹ️ ip6tables not found. Skipping IPv6 firewall configuration.${C_RESET}"
+            fi
+            
+            echo -e "\n${C_GREEN}✅ IPv6 has been enabled successfully${C_RESET}"
+            echo -e "${C_YELLOW}💡 Changes will persist across reboots${C_RESET}"
+            
+            # Show IPv6 status
+            echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_BOLD}${C_BLUE}  📊 IPv6 Status${C_RESET}"
+            echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "  ${C_CYAN}IPv6 Status:${C_RESET} $(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $3}')"
+            if [[ -n "$network_interface" ]]; then
+                echo -e "  ${C_CYAN}Interface:${C_RESET} $network_interface"
+                local ipv6_addrs
+                ipv6_addrs=$(ip -6 addr show dev "$network_interface" 2>/dev/null | grep "inet6" | awk '{print $2}' | head -n3)
+                if [[ -n "$ipv6_addrs" ]]; then
+                    echo -e "  ${C_CYAN}IPv6 Addresses:${C_RESET}"
+                    echo "$ipv6_addrs" | while read -r addr; do
+                        echo -e "    - ${C_YELLOW}$addr${C_RESET}"
+                    done
+                else
+                    echo -e "  ${C_YELLOW}⚠️ No IPv6 addresses configured${C_RESET}"
+                fi
+            fi
+        else
+            echo -e "${C_YELLOW}ℹ️ Continuing with IPv4-only configuration...${C_RESET}"
+        fi
+    fi
+}
+
 check_tcp_bbr_status() {
     clear; show_banner
     echo -e "${C_BOLD}${C_PURPLE}--- 📊 TCP BBR Status Check ---${C_RESET}"
@@ -4003,41 +4305,61 @@ detect_vpn_connection() {
 enable_dns_forwarding() {
     echo -e "${C_BLUE}🔍 Enabling DNS forwarding...${C_RESET}"
     
-    # Enable DNS forwarding in systemd-resolved if available
-    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-        if [ -f /etc/systemd/resolved.conf ]; then
-            if ! grep -q "^DNSStubListener=no" /etc/systemd/resolved.conf; then
-                sed -i 's/^#DNSStubListener=.*/DNSStubListener=no/' /etc/systemd/resolved.conf
-                sed -i '/^DNSStubListener=no/!s/^DNSStubListener=.*/DNSStubListener=no/' /etc/systemd/resolved.conf
-                if ! grep -q "^DNSStubListener=no" /etc/systemd/resolved.conf; then
-                    echo "DNSStubListener=no" >> /etc/systemd/resolved.conf
+    # Check if DNSTT is installed - if so, configure resolv.conf to use localhost
+    if [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ]; then
+        # DNSTT is installed - ensure resolv.conf uses 127.0.0.1
+        # The EDNS proxy on port 53 will handle DNS forwarding
+        if [ ! -L /etc/resolv.conf ] && [ -f /etc/resolv.conf ]; then
+            chattr -i /etc/resolv.conf 2>/dev/null
+            if ! grep -qE "^nameserver 127.0.0.1" /etc/resolv.conf; then
+                echo -e "${C_YELLOW}⚠️ Configuring /etc/resolv.conf for DNSTT DNS forwarding...${C_RESET}"
+                # Backup original nameservers
+                local backup_dns=$(grep "^nameserver" /etc/resolv.conf | grep -v "127.0.0.1" | head -n 2)
+                # Set localhost as primary, keep backup DNS servers
+                sed -i '/^nameserver/d' /etc/resolv.conf
+                echo "nameserver 127.0.0.1" >> /etc/resolv.conf
+                if [[ -n "$backup_dns" ]]; then
+                    echo "$backup_dns" >> /etc/resolv.conf
+                else
+                    echo "nameserver $DNS_PRIMARY" >> /etc/resolv.conf
+                    echo "nameserver $DNS_SECONDARY" >> /etc/resolv.conf
                 fi
-                systemctl restart systemd-resolved 2>/dev/null
-                echo -e "${C_GREEN}✅ DNS forwarding enabled in systemd-resolved${C_RESET}"
+                chattr +i /etc/resolv.conf 2>/dev/null
+                echo -e "${C_GREEN}✅ DNS forwarding configured for DNSTT (127.0.0.1)${C_RESET}"
+            else
+                echo -e "${C_GREEN}✅ DNS forwarding already configured for DNSTT${C_RESET}"
             fi
         fi
-    fi
-    
-    # Configure DNSTT if installed and not running
-    if [ -f "$DNSTT_SERVICE_FILE" ]; then
-        if ! systemctl is-active --quiet dnstt.service 2>/dev/null; then
+        
+        # Start DNSTT services if installed but not running
+        if [ -f "$DNSTT_SERVICE_FILE" ] && ! systemctl is-active --quiet dnstt.service 2>/dev/null; then
             echo -e "${C_YELLOW}⚠️ DNSTT is installed but not running. Starting...${C_RESET}"
             systemctl start dnstt.service 2>/dev/null
+            sleep 2
+        fi
+        
+        if [ -f "$DNSTT_EDNS_SERVICE" ] && ! systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
             systemctl start dnstt-edns-proxy.service 2>/dev/null
             sleep 2
-            if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                echo -e "${C_GREEN}✅ DNSTT DNS forwarding enabled${C_RESET}"
-            fi
-        else
-            echo -e "${C_GREEN}✅ DNSTT DNS forwarding already active${C_RESET}"
         fi
-    fi
-    
-    # Ensure /etc/resolv.conf uses proper DNS
-    if [ ! -L /etc/resolv.conf ] && [ -f /etc/resolv.conf ]; then
-        if ! grep -qE "^nameserver (127.0.0.1|127.0.0.53)" /etc/resolv.conf; then
-            echo -e "${C_YELLOW}⚠️ Configuring /etc/resolv.conf for DNS forwarding...${C_RESET}"
-            sed -i 's/^nameserver.*/nameserver 127.0.0.1/' /etc/resolv.conf
+        
+        if systemctl is-active --quiet dnstt.service 2>/dev/null && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+            echo -e "${C_GREEN}✅ DNSTT DNS forwarding enabled and active${C_RESET}"
+        fi
+    else
+        # DNSTT not installed - use systemd-resolved if available
+        if systemctl is-active --quiet systemd-resolved 2>/dev/null && ! systemctl is-masked systemd-resolved 2>/dev/null; then
+            if [ -f /etc/systemd/resolved.conf ]; then
+                if ! grep -q "^DNSStubListener=no" /etc/systemd/resolved.conf; then
+                    sed -i 's/^#DNSStubListener=.*/DNSStubListener=no/' /etc/systemd/resolved.conf
+                    sed -i '/^DNSStubListener=no/!s/^DNSStubListener=.*/DNSStubListener=no/' /etc/systemd/resolved.conf
+                    if ! grep -q "^DNSStubListener=no" /etc/systemd/resolved.conf; then
+                        echo "DNSStubListener=no" >> /etc/systemd/resolved.conf
+                    fi
+                    systemctl restart systemd-resolved 2>/dev/null
+                    echo -e "${C_GREEN}✅ DNS forwarding enabled in systemd-resolved${C_RESET}"
+                fi
+            fi
         fi
     fi
 }
@@ -4195,7 +4517,8 @@ fix_all_services() {
                 if [ -L /etc/resolv.conf ]; then
                     rm -f /etc/resolv.conf
                 fi
-                echo "nameserver 8.8.8.8" > /etc/resolv.conf 2>/dev/null
+                echo "nameserver 127.0.0.1" > /etc/resolv.conf 2>/dev/null
+                echo "nameserver 8.8.8.8" >> /etc/resolv.conf 2>/dev/null
                 echo "nameserver 8.8.4.4" >> /etc/resolv.conf 2>/dev/null
                 chattr +i /etc/resolv.conf 2>/dev/null
                 pkill -9 systemd-resolved 2>/dev/null
@@ -5174,42 +5497,42 @@ protocol_menu() {
             fi
         fi
         
-        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
-        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_BRIGHT_MAGENTA}${C_BOLD}  🔌 PROTOCOL & PANEL MANAGEMENT${C_BRIGHT_CYAN}                                        ║${C_RESET}"
-        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
-        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}📡 TUNNELLING PROTOCOLS${C_RESET}                                                      ${C_BRIGHT_CYAN}║${C_RESET}"
-        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                   ${C_BRIGHT_CYAN}║${C_RESET}"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}1${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🚀 Install badvpn (UDP 7300)${C_RESET}                        ${badvpn_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}2${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall badvpn${C_RESET}                                          ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}3${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🚀 Install udp-custom (Excl. 53,5300)${C_RESET}              ${udp_custom_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}4${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall udp-custom${C_RESET}                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}5${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔒 Install ${ssl_tunnel_text}${C_RESET}                   ${ssl_tunnel_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}6${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall SSL Tunnel${C_RESET}                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}7${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}📡 Install/View DNSTT (Port 53/5300)${C_RESET}              ${dnstt_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}8${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall DNSTT${C_RESET}                                          ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}9${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🌐 Install WebSocket Proxy${webproxy_ports}${C_RESET}         ${webproxy_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}10${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall WebSocket Proxy${C_RESET}                              ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}11${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🌐 Install/Manage Nginx Proxy (80/443)${C_RESET}            ${nginx_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}14${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🌐 Install HTTP Custom (Port $HTTP_CUSTOM_PORT)${C_RESET}            ${http_custom_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}15${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall HTTP Custom${C_RESET}                                  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}16${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🛡  Install ZiVPN (UDP 5667 + Port Share)${C_RESET}          ${zivpn_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}17${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall ZiVPN${C_RESET}                                          ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                   ${C_BRIGHT_CYAN}║${C_RESET}"
-        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}💻 MANAGEMENT PANELS${C_RESET}                                                   ${C_BRIGHT_CYAN}║${C_RESET}"
-        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                   ${C_BRIGHT_CYAN}║${C_RESET}"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}12${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}💻 Install X-UI Panel${C_RESET}                                 ${xui_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}13${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Uninstall X-UI Panel${C_RESET}                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}0${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_CYAN}↩️  Return to Main Menu${C_RESET}                                           ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_MAGENTA}${C_BOLD}🔌  PROTOCOL & PANEL MANAGEMENT${C_RESET}${C_BRIGHT_CYAN}                                                                        ║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}📡  TUNNELLING PROTOCOLS${C_RESET}                                                                        ${C_BRIGHT_CYAN}║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                                                        ${C_BRIGHT_CYAN}║${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}1${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🚀  Install badvpn (UDP 7300)${C_RESET}                                    ${badvpn_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}2${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall badvpn${C_RESET}                                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}3${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🚀  Install udp-custom (Excl. 53,5300)${C_RESET}                            ${udp_custom_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}4${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall udp-custom${C_RESET}                                              ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}5${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🔒  Install ${ssl_tunnel_text}${C_RESET}                                   ${ssl_tunnel_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}6${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall SSL Tunnel${C_RESET}                                              ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}7${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}📡  Install/View DNSTT (Port 53/5300)${C_RESET}                            ${dnstt_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}8${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall DNSTT${C_RESET}                                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}9${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🌐  Install WebSocket Proxy${webproxy_ports}${C_RESET}                     ${webproxy_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}10${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall WebSocket Proxy${C_RESET}                                          ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}11${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🌐  Install/Manage Nginx Proxy (80/443)${C_RESET}                        ${nginx_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}14${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🌐  Install HTTP Custom (Port $HTTP_CUSTOM_PORT)${C_RESET}                        ${http_custom_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}15${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall HTTP Custom${C_RESET}                                              ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}16${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🛡   Install ZiVPN (UDP 5667 + Port Share)${C_RESET}                        ${zivpn_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}17${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall ZiVPN${C_RESET}                                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                                                        ${C_BRIGHT_CYAN}║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}💻  MANAGEMENT PANELS${C_RESET}                                                                        ${C_BRIGHT_CYAN}║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                                                        ${C_BRIGHT_CYAN}║${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}12${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}💻  Install X-UI Panel${C_RESET}                                             ${xui_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}13${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall X-UI Panel${C_RESET}                                                 ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}0${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_CYAN}${C_BOLD}↩️   Return to Main Menu${C_RESET}                                                                        ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
         # Spacing line before input prompt
-        echo -e "${C_DIM}                                                                               ${C_RESET}"
+        echo -e "${C_DIM}                                                                                                        ${C_RESET}"
         echo
-        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
         echo -e -n "${C_BRIGHT_YELLOW}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}👉${C_RESET} ${C_BRIGHT_CYAN}${C_BOLD}Select an option:${C_RESET} ${C_BRIGHT_WHITE}"
         read -r choice
-        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
         case $choice in
             1) install_badvpn; press_enter ;; 2) uninstall_badvpn; press_enter ;;
@@ -5252,9 +5575,17 @@ network_optimization_menu() {
         echo -e "     ${C_CHOICE}1)${C_RESET} 🔥 Configure iptables Rules $iptables_status"
         echo -e "     ${C_CHOICE}2)${C_RESET} 👁️ View Current iptables Rules"
         echo -e "     ${C_CHOICE}3)${C_RESET} 🗑️ Reset iptables Rules to Default"
+        # Check IPv6 status
+        local ipv6_status="${C_STATUS_I}(Disabled)${C_RESET}"
+        if sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | grep -q "= 0"; then
+            ipv6_status="${C_STATUS_A}(Enabled)${C_RESET}"
+        fi
+        
         echo -e "     ${C_ACCENT}--- 🚀 TCP BBR CONGESTION CONTROL ---${C_RESET}"
         echo -e "     ${C_CHOICE}4)${C_RESET} 🚀 Enable TCP BBR & Network Optimizations $bbr_status"
         echo -e "     ${C_CHOICE}5)${C_RESET} 📊 Check TCP BBR Status"
+        echo -e "     ${C_ACCENT}--- 🌐 IPv6 CONFIGURATION ---${C_RESET}"
+        echo -e "     ${C_CHOICE}6)${C_RESET} 🌐 Configure IPv6 $ipv6_status"
         echo -e "   ${C_DIM}~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~${C_RESET}"
         echo -e "     ${C_WARN}0)${C_RESET} ↩️ Return to Main Menu"
         echo
@@ -5265,6 +5596,7 @@ network_optimization_menu() {
             3) reset_iptables_rules; press_enter ;;
             4) enable_tcp_bbr; press_enter ;;
             5) check_tcp_bbr_status; press_enter ;;
+            6) configure_ipv6; press_enter ;;
             0) return ;;
             *) invalid_option ;;
         esac
@@ -5426,16 +5758,16 @@ uninstall_script() {
 
 press_enter() {
     echo
-    echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
-    echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_CYAN}${C_BOLD}Press ${C_BRIGHT_GREEN}${C_BOLD}[Enter]${C_RESET}${C_BRIGHT_CYAN}${C_BOLD} to return to the menu...${C_RESET}${C_BRIGHT_YELLOW}                                  ║${C_RESET}"
-    echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
+    echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
+    echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_CYAN}${C_BOLD}Press ${C_BRIGHT_GREEN}${C_BOLD}[Enter]${C_RESET}${C_BRIGHT_CYAN}${C_BOLD} to return to the menu...${C_RESET}${C_BRIGHT_YELLOW}                                                                        ║${C_RESET}"
+    echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
     read -r
 }
 invalid_option() {
     echo
-    echo -e "${C_BRIGHT_RED}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
-    echo -e "${C_BRIGHT_RED}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_RED}${C_BOLD}❌ Invalid option. Please try again.${C_RESET}${C_BRIGHT_RED}                                                       ║${C_RESET}"
-    echo -e "${C_BRIGHT_RED}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
+    echo -e "${C_BRIGHT_RED}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
+    echo -e "${C_BRIGHT_RED}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_RED}${C_BOLD}❌  Invalid option. Please try again.${C_RESET}${C_BRIGHT_RED}                                                                        ║${C_RESET}"
+    echo -e "${C_BRIGHT_RED}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
     sleep 1
 }
 
@@ -5445,41 +5777,41 @@ main_menu() {
         export UNINSTALL_MODE="interactive"
         show_banner
         
-        # User Management Section - Stable Fixed Frame
-        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
-        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_CYAN}${C_BOLD}👤 USER MANAGEMENT${C_RESET}${C_BRIGHT_MAGENTA}                                                    ║${C_RESET}"
-        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
-        printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}1${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}✨ Create New User${C_RESET}                        ${C_BRIGHT_GREEN}${C_BOLD}5${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔓 Unlock User Account${C_RESET}            ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
-        printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}2${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🗑  Delete User${C_RESET}                          ${C_BRIGHT_GREEN}${C_BOLD}6${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}📋 List All Managed Users${C_RESET}         ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
-        printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}3${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}✏️  Edit User Details${C_RESET}                     ${C_BRIGHT_GREEN}${C_BOLD}7${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔄 Renew User Account${C_RESET}            ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
-        printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}4${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔒 Lock User Account${C_RESET}                                                          ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
-        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
+        # User Management Section - Enhanced Wider Frame
+        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_CYAN}${C_BOLD}👤  USER MANAGEMENT${C_RESET}${C_BRIGHT_MAGENTA}                                                                        ║${C_RESET}"
+        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
+        printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}1${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}✨  Create New User${C_RESET}                                    ${C_BRIGHT_GREEN}${C_BOLD}5${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🔓  Unlock User Account${C_RESET}                      ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
+        printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}2${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Delete User${C_RESET}                                      ${C_BRIGHT_GREEN}${C_BOLD}6${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}📋  List All Managed Users${C_RESET}                    ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
+        printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}3${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}✏️   Edit User Details${C_RESET}                                  ${C_BRIGHT_GREEN}${C_BOLD}7${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🔄  Renew User Account${C_RESET}                        ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
+        printf "${C_BRIGHT_MAGENTA}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}4${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🔒  Lock User Account${C_RESET}                                                                                  ${C_BRIGHT_MAGENTA}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
         
-        # System Utilities Section - Stable Fixed Frame
-        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
-        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_MAGENTA}${C_BOLD}⚙️  SYSTEM UTILITIES${C_RESET}${C_BRIGHT_CYAN}                                                    ║${C_RESET}"
-        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}8${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔌 Install Protocols & Panels${C_RESET}              ${C_BRIGHT_GREEN}${C_BOLD}9${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}💾 Backup User Data${C_RESET}              ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}10${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}📥 Restore User Data${C_RESET}                    ${C_BRIGHT_GREEN}${C_BOLD}11${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🎨 SSH Banner Management${C_RESET}         ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}12${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🧹 Cleanup Expired Users${C_RESET}                 ${C_BRIGHT_GREEN}${C_BOLD}13${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🚀 DT Proxy Management${C_RESET}            ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}14${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}📊 VPN Status & Auto-Config${C_RESET}              ${C_BRIGHT_GREEN}${C_BOLD}15${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}🔥 Network Optimization${C_RESET}           ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
+        # System Utilities Section - Enhanced Wider Frame
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_MAGENTA}${C_BOLD}⚙️   SYSTEM UTILITIES${C_RESET}${C_BRIGHT_CYAN}                                                                        ║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}8${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🔌  Install Protocols & Panels${C_RESET}                            ${C_BRIGHT_GREEN}${C_BOLD}9${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}💾  Backup User Data${C_RESET}                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}10${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}📥  Restore User Data${C_RESET}                                  ${C_BRIGHT_GREEN}${C_BOLD}11${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🎨  SSH Banner Management${C_RESET}                 ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}12${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🧹  Cleanup Expired Users${C_RESET}                              ${C_BRIGHT_GREEN}${C_BOLD}13${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🚀  DT Proxy Management${C_RESET}                    ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}14${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}📊  VPN Status & Auto-Config${C_RESET}                            ${C_BRIGHT_GREEN}${C_BOLD}15${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🔥  Network Optimization${C_RESET}                   ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
         
-        # Danger Zone Section - Stable Fixed Frame (removed blink for stability)
-        echo -e "${C_BRIGHT_RED}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
-        echo -e "${C_BRIGHT_RED}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}⚠️  DANGER ZONE - Use with Caution! ⚠️${C_RESET}${C_BRIGHT_RED}                                 ║${C_RESET}"
-        echo -e "${C_BRIGHT_RED}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════╣${C_RESET}"
-        printf "${C_BRIGHT_RED}    ║${C_RESET}  ${C_BRIGHT_RED}${C_BOLD}99${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_RED}${C_BOLD}💥 Uninstall Script${C_RESET}                                    ${C_BRIGHT_GREEN}${C_BOLD}0${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_CYAN}${C_BOLD}🚪 Exit${C_RESET}              ${C_BRIGHT_RED}║${C_RESET}\n"
-        echo -e "${C_BRIGHT_RED}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
+        # Danger Zone Section - Enhanced Wider Frame
+        echo -e "${C_BRIGHT_RED}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_BRIGHT_RED}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}⚠️   DANGER ZONE - Use with Caution! ⚠️${C_RESET}${C_BRIGHT_RED}                                                                        ║${C_RESET}"
+        echo -e "${C_BRIGHT_RED}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
+        printf "${C_BRIGHT_RED}    ║${C_RESET}  ${C_BRIGHT_RED}${C_BOLD}99${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_RED}${C_BOLD}💥  Uninstall Script${C_RESET}                                                                    ${C_BRIGHT_GREEN}${C_BOLD}0${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_CYAN}${C_BOLD}🚪  Exit${C_RESET}                      ${C_BRIGHT_RED}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_RED}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
         
-        # Input Prompt - Clean Stable Frame
-        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
+        # Input Prompt - Enhanced Wider Frame
+        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
         echo -e -n "${C_BRIGHT_YELLOW}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}👉${C_RESET} ${C_BRIGHT_CYAN}${C_BOLD}Select an option:${C_RESET} ${C_BRIGHT_WHITE}"
         read -r choice
-        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
         case $choice in
             1) create_user; press_enter ;;
@@ -5500,10 +5832,10 @@ main_menu() {
             99) uninstall_script ;;
             0) 
                 echo
-                echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════╗${C_RESET}"
-                echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}👋 Thank you for using ${REPO_NAME} Manager!${C_RESET}${C_BRIGHT_CYAN}                                                       ║${C_RESET}"
-                echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}Goodbye! See you soon! 👋${C_RESET}${C_BRIGHT_CYAN}                                                               ║${C_RESET}"
-                echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════╝${C_RESET}"
+                echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
+                echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}👋  Thank you for using ${REPO_NAME} Manager!${C_RESET}${C_BRIGHT_CYAN}                                                                        ║${C_RESET}"
+                echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}Goodbye! See you soon! 👋${C_RESET}${C_BRIGHT_CYAN}                                                                        ║${C_RESET}"
+                echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
                 echo
                 exit 0 
                 ;;
