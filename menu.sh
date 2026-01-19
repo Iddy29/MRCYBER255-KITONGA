@@ -20,7 +20,7 @@ REPO_BASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${RE
 APP_BASE_DIR_NAME=$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')  # Converts REPO_NAME to lowercase
 APP_BASE_DIR="/etc/${APP_BASE_DIR_NAME}"
 
-# DNS Configuration (used for DNSTT and system DNS)
+# DNS Configuration (used for system DNS)
 # You can change these to your preferred DNS servers
 DNS_PRIMARY="8.8.8.8"      # Google DNS
 DNS_SECONDARY="1.1.1.1"    # Cloudflare DNS
@@ -30,14 +30,8 @@ DEFAULT_SSL_TUNNEL_PORT="444"       # SSL Tunnel default port
 DEFAULT_WEB_PROXY_PORT="8080"    # WebSocket Proxy default port
 DEFAULT_BADVPN_PORT="7300"          # BadVPN UDP port
 DEFAULT_ZIVPN_PORT="5667"           # ZiVPN UDP port
-DEFAULT_DNSTT_PUBLIC_PORT="53"      # DNSTT public port (EDNS proxy)
-DEFAULT_DNSTT_INTERNAL_PORT="5300"  # DNSTT internal port (server)
 
-# Default DNSTT MTU (Maximum Transmission Unit)
-# Options: 512, 1200, 1800 (recommended for high speed)
-DEFAULT_DNSTT_MTU="1800"
-
-# Default V2Ray/XRay Port (for DNSTT forwarding option)
+# Default V2Ray/XRay Port
 DEFAULT_V2RAY_PORT="8787"
 
 # Default Backup Location
@@ -117,12 +111,6 @@ HAPROXY_CONFIG="/etc/haproxy/haproxy.cfg"
 NGINX_CONFIG_FILE="/etc/nginx/sites-available/default"
 SSL_CERT_DIR="$APP_BASE_DIR/ssl"
 SSL_CERT_FILE="$SSL_CERT_DIR/${APP_BASE_DIR_NAME}.pem"
-DNSTT_SERVICE_FILE="/etc/systemd/system/dnstt.service"
-DNSTT_BINARY="/usr/local/bin/dnstt-server"
-DNSTT_KEYS_DIR="$APP_BASE_DIR/dnstt"
-DNSTT_CONFIG_FILE="$DB_DIR/dnstt_info.conf"
-DNSTT_EDNS_PROXY="/usr/local/bin/dnstt-edns-proxy.py"
-DNSTT_EDNS_SERVICE="/etc/systemd/system/dnstt-edns-proxy.service"
 UDP_CUSTOM_DIR="/root/udp"
 UDP_CUSTOM_SERVICE_FILE="/etc/systemd/system/udp-custom.service"
 SSH_BANNER_FILE="$APP_BASE_DIR/bannerssh"
@@ -331,26 +319,21 @@ check_and_free_ports() {
                 fi
             fi
             
-            # Check if it's a DNSTT-related process (sldns-server, dnstt-server, python3 for EDNS proxy)
-            local is_dnstt_process=false
-            if [[ "$conflicting_name" == *"sldns-server"* ]] || [[ "$conflicting_name" == *"dnstt-server"* ]] || \
-               [[ "$conflicting_name" == *"dnstt"* ]] || ([[ "$conflicting_name" == *"python3"* ]] && [[ "$port" == "53" ]]); then
-                is_dnstt_process=true
+            # Check if it's a DNS-related process on port 53
+            local is_dns_process=false
+            if [[ "$port" == "53" ]] && ([[ "$conflicting_name" == *"systemd-resolve"* ]] || [[ "$conflicting_name" == *"python3"* ]]); then
+                is_dns_process=true
             fi
             
-            # For DNSTT processes, automatically handle them
-            if [[ "$is_dnstt_process" == "true" ]]; then
-                echo -e "${C_YELLOW}⚠️ Port $port is in use by DNSTT process '${conflicting_name:-unknown}' (PID: ${conflicting_pid}).${C_RESET}"
-                echo -e "${C_BLUE}ℹ️ Detected DNSTT process. Stopping DNSTT services automatically...${C_RESET}"
+            # For DNS processes on port 53, automatically handle them
+            if [[ "$is_dns_process" == "true" ]]; then
+                echo -e "${C_YELLOW}⚠️ Port $port is in use by DNS process '${conflicting_name:-unknown}' (PID: ${conflicting_pid}).${C_RESET}"
+                echo -e "${C_BLUE}ℹ️ Detected DNS process. Stopping DNS services automatically...${C_RESET}"
                 
-                # Stop DNSTT services properly
-                if systemctl stop dnstt.service 2>/dev/null; then
-                    echo -e "${C_GREEN}✅ Stopped dnstt.service${C_RESET}"
-                fi
-                if [ -f "$DNSTT_EDNS_SERVICE" ]; then
-                    if systemctl stop dnstt-edns-proxy.service 2>/dev/null; then
-                        echo -e "${C_GREEN}✅ Stopped dnstt-edns-proxy.service${C_RESET}"
-                    fi
+                # Stop systemd-resolved if running
+                if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+                    systemctl stop systemd-resolved 2>/dev/null
+                    echo -e "${C_GREEN}✅ Stopped systemd-resolved${C_RESET}"
                 fi
                 
                 sleep 2
@@ -377,7 +360,7 @@ check_and_free_ports() {
                     
                     if ss -lntp 2>/dev/null | grep -q ":$port\s" || ss -lunp 2>/dev/null | grep -q ":$port\s"; then
                         echo -e "${C_RED}❌ Failed to free port $port. Please stop the process manually and try again.${C_RESET}"
-                        echo -e "${C_YELLOW}💡 Try: systemctl stop dnstt.service dnstt-edns-proxy.service${C_RESET}"
+                        echo -e "${C_YELLOW}💡 Try: systemctl stop systemd-resolved${C_RESET}"
                         return 1
                     fi
                 fi
@@ -933,14 +916,8 @@ restore_user_data() {
     if [ -d "$temp_dir/${APP_BASE_DIR_NAME}/ssl" ]; then
         cp -r "$temp_dir/${APP_BASE_DIR_NAME}/ssl" "$DB_DIR/"
     fi
-    if [ -d "$temp_dir/${APP_BASE_DIR_NAME}/dnstt" ]; then
-        cp -r "$temp_dir/${APP_BASE_DIR_NAME}/dnstt" "$DB_DIR/"
-    fi
     if [ -f "$temp_dir/${APP_BASE_DIR_NAME}/dns_info.conf" ]; then
         cp "$temp_dir/${APP_BASE_DIR_NAME}/dns_info.conf" "$DB_DIR/"
-    fi
-    if [ -f "$temp_dir/${APP_BASE_DIR_NAME}/dnstt_info.conf" ]; then
-        cp "$temp_dir/${APP_BASE_DIR_NAME}/dnstt_info.conf" "$DB_DIR/"
     fi
     if [ -f "$temp_dir/${APP_BASE_DIR_NAME}/webproxy_config.conf" ]; then
         cp "$temp_dir/${APP_BASE_DIR_NAME}/webproxy_config.conf" "$DB_DIR/"
@@ -1134,7 +1111,7 @@ After=network.target
 [Service]
 User=root
 Type=simple
-ExecStart="$UDP_CUSTOM_DIR/udp-custom" server -exclude 53,5300
+ExecStart="$UDP_CUSTOM_DIR/udp-custom" server
 WorkingDirectory=$UDP_CUSTOM_DIR/
 Restart=always
 RestartSec=2s
@@ -1352,784 +1329,264 @@ EOF
     echo -e "${C_GREEN}✅ SSL Tunnel has been uninstalled.${C_RESET}"
 }
 
-verify_dnstt_keys() {
-    local pubkey_file="$DNSTT_KEYS_DIR/server.pub"
-    local privkey_file="$DNSTT_KEYS_DIR/server.key"
-    
-    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-    echo -e "${C_BOLD}${C_BLUE}  🔍 DNSTT KEY VERIFICATION${C_RESET}"
-    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-    
-    # Check if key files exist
-    if [[ ! -f "$pubkey_file" ]]; then
-        echo -e "  ${C_RED}❌ Public key file not found: $pubkey_file${C_RESET}"
+# Placeholder for new DNS system
+install_new_dns_system() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 📡 New DNS System Installation ---${C_RESET}"
+    echo -e "${C_YELLOW}⚠️ This feature is under development.${C_RESET}"
+    echo -e "${C_YELLOW}A new DNS system will be configured here.${C_RESET}"
+    press_enter
+}
+
+# =============================================================================
+# SLOWDNS SYSTEM - Advanced DNS Tunneling with Enhanced Features
+# =============================================================================
+
+# SlowDNS Configuration Variables
+SLOWDNS_DIR="/root/slowdns"
+SLOWDNS_BINARY="/usr/local/bin/slowdns-server"
+SLOWDNS_KEYS_DIR="$SLOWDNS_DIR/keys"
+SLOWDNS_CONFIG_FILE="$DB_DIR/slowdns_info.conf"
+SLOWDNS_SERVICE_FILE="/etc/systemd/system/slowdns.service"
+SLOWDNS_PUBLIC_PORT="53"
+SLOWDNS_INTERNAL_PORT="5300"
+SLOWDNS_DEFAULT_MTU="1200"
+
+# Helper function to detect server IP
+_detect_server_ip() {
+    local server_ip=""
+    if command -v curl &> /dev/null; then
+        server_ip=$(curl -s -4 ifconfig.me 2>/dev/null || curl -s -4 icanhazip.com 2>/dev/null || curl -s -4 ipinfo.io/ip 2>/dev/null)
+    fi
+    if [[ -z "$server_ip" ]] && command -v wget &> /dev/null; then
+        server_ip=$(wget -qO- -4 ifconfig.me 2>/dev/null || wget -qO- -4 icanhazip.com 2>/dev/null)
+    fi
+    if [[ -z "$server_ip" ]] && command -v hostname &> /dev/null; then
+        server_ip=$(hostname -I | awk '{print $1}' 2>/dev/null)
+    fi
+    if [[ -z "$server_ip" ]] && command -v ip &> /dev/null; then
+        server_ip=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+' | head -n1)
+    fi
+    echo "$server_ip"
+}
+
+# Helper function to detect server hostname
+_detect_server_hostname() {
+    hostname -f 2>/dev/null || hostname 2>/dev/null || echo ""
+}
+
+# Validate nameserver domain (must be hostname, not IP)
+_validate_nameserver_domain() {
+    local domain=$1
+    if [[ -z "$domain" ]]; then
+        echo "ERROR: Nameserver domain cannot be empty"
         return 1
     fi
-    
-    if [[ ! -f "$privkey_file" ]]; then
-        echo -e "  ${C_RED}❌ Private key file not found: $privkey_file${C_RESET}"
+    # Check if it's an IP address
+    if [[ "$domain" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "ERROR: NS records must point to HOSTNAMES, not IP addresses!"
+        echo "You provided: $domain (this is an IP address)"
+        echo "Solution: Create an A record for a hostname first, then point the NS record to that hostname."
         return 1
     fi
-    
-    echo -e "  ${C_GREEN}✅ Both key files exist${C_RESET}"
-    
-    # Read and validate public key
-    local public_key_content
-    public_key_content=$(cat "$pubkey_file" 2>/dev/null)
-    
-    if [[ -z "$public_key_content" ]]; then
-        echo -e "  ${C_RED}❌ Public key file is empty${C_RESET}"
+    # Basic domain validation
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+        echo "ERROR: Invalid domain format: $domain"
         return 1
     fi
-    
-    # Check public key format (DNSTT keys start with "dnstt:")
-    if [[ "$public_key_content" =~ ^dnstt: ]]; then
-        echo -e "  ${C_GREEN}✅ Public key format is valid (DNSTT format)${C_RESET}"
-    else
-        echo -e "  ${C_YELLOW}⚠️ Public key format may be incorrect (should start with 'dnstt:')${C_RESET}"
-    fi
-    
-    # Check key length (DNSTT public keys are typically long)
-    local key_length=${#public_key_content}
-    if [[ $key_length -gt 50 ]]; then
-        echo -e "  ${C_GREEN}✅ Public key length is valid ($key_length characters)${C_RESET}"
-    else
-        echo -e "  ${C_YELLOW}⚠️ Public key seems too short ($key_length characters)${C_RESET}"
-    fi
-    
-    # Check private key size (should be reasonable)
-    if [[ -f "$privkey_file" ]]; then
-        local privkey_size
-        privkey_size=$(stat -f%z "$privkey_file" 2>/dev/null || stat -c%s "$privkey_file" 2>/dev/null || echo "0")
-        if [[ $privkey_size -gt 0 ]]; then
-            echo -e "  ${C_GREEN}✅ Private key file size: ${privkey_size} bytes${C_RESET}"
-        fi
-    fi
-    
-    # Verify keys match using dnstt-server binary if available
-    if [[ -f "$DNSTT_BINARY" ]]; then
-        echo -e "\n  ${C_BLUE}🔐 Verifying key pair match...${C_RESET}"
-        # Test if binary can read the keys (some versions may not support -test-keys)
-        if "$DNSTT_BINARY" -test-keys -privkey-file "$privkey_file" -pubkey-file "$pubkey_file" >/dev/null 2>&1; then
-            echo -e "  ${C_GREEN}✅ Key pair verification: PASSED${C_RESET}"
-        else
-            # Alternative: check if we can read both keys without errors
-            if [[ -r "$privkey_file" ]] && [[ -r "$pubkey_file" ]]; then
-                echo -e "  ${C_GREEN}✅ Both keys are readable (binary verification not available)${C_RESET}"
-            else
-                echo -e "  ${C_RED}❌ Key pair verification: FAILED (keys may not match or binary doesn't support verification)${C_RESET}"
-                return 1
-            fi
-        fi
-    else
-        echo -e "  ${C_YELLOW}⚠️ DNSTT binary not found, skipping key pair verification${C_RESET}"
-    fi
-    
-    echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-    echo -e "${C_BOLD}${C_CYAN}  📋 PUBLIC KEY CONTENT${C_RESET}"
-    echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-    echo -e "${C_YELLOW}$public_key_content${C_RESET}"
-    echo -e "\n${C_DIM}📄 File location: $pubkey_file${C_RESET}"
-    
-    # Show file permissions
-    local pubkey_perms
-    pubkey_perms=$(stat -c "%a" "$pubkey_file" 2>/dev/null || stat -f "%OLp" "$pubkey_file" 2>/dev/null || echo "unknown")
-    echo -e "${C_DIM}🔐 File permissions: $pubkey_perms${C_RESET}"
-    
-    # Check if service is using these keys
-    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-        local service_key_file
-        service_key_file=$(systemctl show dnstt.service | grep -oP 'ExecStart=.*-privkey-file\s+\K[^\s]+' || echo "")
-        if [[ -n "$service_key_file" ]] && [[ "$service_key_file" == "$privkey_file" ]]; then
-            echo -e "\n  ${C_GREEN}✅ DNSTT service is actively using these keys${C_RESET}"
-        fi
-    fi
-    
-    echo -e "\n${C_GREEN}✅ Public key verification completed successfully!${C_RESET}"
-    echo -e "${C_DIM}💡 Use this public key in your DNSTT client configuration${C_RESET}"
     return 0
 }
 
-show_dnstt_details() {
-    if [ -f "$DNSTT_CONFIG_FILE" ]; then
-        source "$DNSTT_CONFIG_FILE"
-        echo -e "\n${C_GREEN}╔════════════════════════════════════════════════════════════╗${C_RESET}"
-        echo -e "${C_GREEN}║${C_RESET}        ${C_BOLD}${C_WHITE}📡 DNSTT CONNECTION DETAILS 📡${C_RESET}        ${C_GREEN}║${C_RESET}"
-        echo -e "${C_GREEN}╚════════════════════════════════════════════════════════════╝${C_RESET}"
-        
-        echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "${C_BOLD}${C_CYAN}  🌐 DOMAIN CONFIGURATION${C_RESET}"
-        echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}Tunnel Domain:${C_RESET}     ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
-        if [[ "$DNSTT_RECORDS_MANAGED" == "false" && -n "$NS_DOMAIN" ]]; then
-            echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}Nameserver Domain:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET}"
-        fi
-        
-        echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "${C_BOLD}${C_CYAN}  🔑 AUTHENTICATION${C_RESET}"
-        echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "  ${C_GREEN}3️⃣${C_RESET} ${C_WHITE}Public Key:${C_RESET}"
-        
-        # Try to read from actual file first, then from config
-        local pubkey_file="$DNSTT_KEYS_DIR/server.pub"
-        local current_pubkey=""
-        
-        if [[ -f "$pubkey_file" ]]; then
-            current_pubkey=$(cat "$pubkey_file" 2>/dev/null | tr -d '\n\r')
-        fi
-        
-        if [[ -n "$current_pubkey" ]]; then
-            echo -e "     ${C_YELLOW}$current_pubkey${C_RESET}"
-            echo -e "     ${C_DIM}📄 File: $pubkey_file${C_RESET}"
-            echo -e "     ${C_DIM}💡 Copy the full key above for VPN client configuration${C_RESET}"
-        elif [[ -n "$PUBLIC_KEY" ]]; then
-            echo -e "     ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
-        else
-            echo -e "     ${C_RED}❌ Public key not found${C_RESET}"
-        fi
-        
-        echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "${C_BOLD}${C_CYAN}  ⚙️ NETWORK SETTINGS${C_RESET}"
-        echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        if [[ -n "$FORWARD_DESC" ]]; then
-            echo -e "  ${C_GREEN}4️⃣${C_RESET} ${C_WHITE}Forwarding Target:${C_RESET} ${C_YELLOW}$FORWARD_DESC${C_RESET}"
-        else
-            echo -e "  ${C_GREEN}4️⃣${C_RESET} ${C_WHITE}Forwarding Target:${C_RESET} ${C_YELLOW}Unknown (config_missing)${C_RESET}"
-        fi
-        if [[ -n "$MTU_VALUE" ]]; then
-            echo -e "  ${C_GREEN}5️⃣${C_RESET} ${C_WHITE}MTU Value:${C_RESET}        ${C_YELLOW}$MTU_VALUE bytes${C_RESET}"
-        fi
-        
-        echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "${C_BOLD}${C_CYAN}  🔌 PORT CONFIGURATION${C_RESET}"
-        echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "  ${C_GREEN}6️⃣${C_RESET} ${C_WHITE}Public Port:${C_RESET}      ${C_YELLOW}53 (UDP)${C_RESET} ${C_DIM}→ EDNS Proxy${C_RESET}"
-        echo -e "  ${C_GREEN}7️⃣${C_RESET} ${C_WHITE}Internal Port:${C_RESET}   ${C_YELLOW}5300 (UDP)${C_RESET} ${C_DIM}→ DNSTT Server${C_RESET}"
-        
-        echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "${C_BOLD}${C_CYAN}  🚀 PERFORMANCE SETTINGS${C_RESET}"
-        echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "  ${C_GREEN}8️⃣${C_RESET} ${C_WHITE}EDNS Sizes:${C_RESET}"
-        echo -e "     ${C_DIM}•${C_RESET} External: ${C_YELLOW}512 bytes${C_RESET} ${C_DIM}(shown to DNS resolvers)${C_RESET}"
-        echo -e "     ${C_DIM}•${C_RESET} Internal: ${C_YELLOW}1800 bytes${C_RESET} ${C_DIM}(high-speed tunnel)${C_RESET}"
-        
-        echo -e "\n${C_BOLD}${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "${C_BOLD}${C_RED}  ⚠️ CRITICAL: CLIENT DNS CONFIGURATION${C_RESET}"
-        echo -e "${C_BOLD}${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        if [[ -n "$NS_DOMAIN" ]]; then
-            # Get VPS IP for display
-            local vps_ip
-            vps_ip=$(_detect_server_ip)
-            
-            echo -e "  ${C_RED}❌ DO NOT USE: 8.8.8.8 or any public DNS${C_RESET}"
-            echo -e "  ${C_GREEN}✅ USE INSTEAD: ${C_YELLOW}$NS_DOMAIN${C_RESET} ${C_DIM}(or its IP address)${C_RESET}"
-            echo ""
-            echo -e "  ${C_BOLD}${C_YELLOW}📋 REQUIRED DNS RECORDS:${C_RESET}"
-            if [[ -n "$vps_ip" ]]; then
-                echo -e "    ${C_GREEN}A Record:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}$vps_ip${C_RESET}"
-                echo -e "    ${C_YELLOW}💡${C_RESET} ${C_WHITE}Ensure this A record exists at your DNS provider${C_RESET}"
-            else
-                echo -e "    ${C_GREEN}A Record:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}[Your VPS IP Address]${C_RESET}"
-                echo -e "    ${C_YELLOW}💡${C_RESET} ${C_WHITE}Create this A record at your DNS provider${C_RESET}"
-            fi
-            echo ""
-            echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}After creating the A record, configure your client DNS to use: ${C_YELLOW}$NS_DOMAIN${C_RESET}"
-        else
-            echo -e "  ${C_RED}❌ DO NOT USE: 8.8.8.8 or any public DNS${C_RESET}"
-            echo -e "  ${C_YELLOW}⚠️${C_RESET} ${C_WHITE}Nameserver domain not configured. Please reconfigure DNSTT.${C_RESET}"
-        fi
-        
-        if [[ "$FORWARD_DESC" == *"V2Ray"* ]]; then
-            echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "${C_BOLD}${C_YELLOW}  ⚠️ ACTION REQUIRED${C_RESET}"
-            echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Ensure a V2Ray service (VLESS/VMESS/Trojan) is listening on port $DEFAULT_V2RAY_PORT (no TLS)${C_RESET}"
-        elif [[ "$FORWARD_DESC" == *"SSH"* ]]; then
-            echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "${C_BOLD}${C_YELLOW}  ⚠️ ACTION REQUIRED${C_RESET}"
-            echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Configure your SSH client to use the DNS tunnel${C_RESET}"
-        fi
-        
-        # Display user accounts with credentials for DNSTT connection
-        echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "${C_BOLD}${C_CYAN}  👤 USER ACCOUNTS FOR DNSTT CONNECTION${C_RESET}"
-        echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        
-        if [[ -f "$DB_FILE" ]] && [[ -s "$DB_FILE" ]]; then
-            local user_count=0
-            while IFS=: read -r user pass expiry limit; do
-                [[ -z "$user" || "$user" == \#* ]] && continue
-                
-                # Check if user account is active (not locked and not expired)
-                local user_status=""
-                local status_color="$C_GREEN"
-                local account_status="✅ Active"
-                
-                if ! id "$user" &>/dev/null; then
-                    account_status="❌ Not Found"
-                    status_color="$C_RED"
-                elif passwd -S "$user" 2>/dev/null | grep -q " L "; then
-                    account_status="🔒 Locked"
-                    status_color="$C_YELLOW"
-                else
-                    # Check expiry
-                    local expiry_ts=$(date -d "$expiry" +%s 2>/dev/null || echo 0)
-                    local current_ts=$(date +%s)
-                    if [[ $expiry_ts -lt $current_ts && $expiry_ts -ne 0 ]]; then
-                        account_status="⏰ Expired"
-                        status_color="$C_RED"
-                    fi
-                fi
-                
-                user_count=$((user_count + 1))
-                echo -e "\n  ${C_GREEN}${user_count}️⃣${C_RESET} ${C_WHITE}Username:${C_RESET}     ${C_YELLOW}$user${C_RESET}"
-                echo -e "     ${C_WHITE}Password:${C_RESET}     ${C_YELLOW}$pass${C_RESET}"
-                echo -e "     ${C_WHITE}Expires:${C_RESET}      ${C_YELLOW}$expiry${C_RESET}"
-                echo -e "     ${C_WHITE}Status:${C_RESET}      ${status_color}$account_status${C_RESET}"
-                
-                if [[ "$FORWARD_DESC" == *"SSH"* ]]; then
-                    echo -e "     ${C_DIM}💡 Use these credentials with DNSTT → SSH tunnel${C_RESET}"
-                fi
-            done < <(sort "$DB_FILE")
-            
-            if [[ $user_count -eq 0 ]]; then
-                echo -e "  ${C_YELLOW}⚠️ No users found in database. Create users first to use DNSTT.${C_RESET}"
-            else
-                echo -e "\n  ${C_DIM}💡 Total users: ${C_YELLOW}$user_count${C_RESET}"
-            fi
-        else
-            echo -e "  ${C_YELLOW}⚠️ No user database found. Create users first to use DNSTT.${C_RESET}"
-            echo -e "  ${C_DIM}💡 Use option 1 in main menu to create new users${C_RESET}"
-        fi
-        
-        echo -e "\n${C_DIM}${C_ITALIC}💼 Use these details in your client configuration${C_RESET}"
-    else
-        echo -e "\n${C_YELLOW}⚠️ DNSTT configuration file not found. Details are unavailable.${C_RESET}"
-    fi
-}
-
-check_dnstt_diagnostics() {
+install_slowdns() {
     clear; show_banner
-    echo -e "${C_BOLD}${C_PURPLE}--- 🔍 DNSTT Diagnostics Check ---${C_RESET}"
-    echo ""
+    echo -e "${C_BOLD}${C_PURPLE}--- 📡 SlowDNS (Advanced DNS Tunneling) Installation ---${C_RESET}"
     
-    # Check NS "managed by" condition
-    local SUB="ns3.voltrontechtx.shop"
-    local EXPECTED="idd.voltrontechtx.shop."
-    
-    echo -e "${C_BOLD}${C_CYAN}[1] Checking NS Condition${C_RESET}"
-    echo -e "${C_DIM}  Subdomain: $SUB${C_RESET}"
-    echo -e "${C_DIM}  Expected NS: $EXPECTED${C_RESET}"
-    
-    local ns_result
-    ns_result=$(dig +short NS "$SUB" 2>/dev/null || true)
-    
-    # Check if expected NS is in the result (handle multiple NS records)
-    if echo "$ns_result" | grep -qxF "$EXPECTED"; then
-        echo -e "${C_GREEN}  ✅ [OK] NS condition met: $SUB -> $EXPECTED${C_RESET}"
-    else
-        echo -e "${C_YELLOW}  ⚠️  [WARN] NS not matching yet. Current:${C_RESET}"
-        if [[ -n "$ns_result" ]]; then
-            while IFS= read -r line; do
-                [[ -n "$line" ]] && echo -e "${C_YELLOW}  $line${C_RESET}"
-            done <<< "$ns_result"
-        else
-            echo -e "${C_YELLOW}  (No NS records found)${C_RESET}"
-        fi
-    fi
-    
-    echo ""
-    echo -e "${C_BOLD}${C_CYAN}[2] Checking Listening Ports${C_RESET}"
-    
-    # Check DNS port 53 (UDP)
-    echo -e "${C_DIM}  DNS :53/udp or tcp (authoritative resolver)${C_RESET}"
-    local dns_udp
-    dns_udp=$(sudo ss -lunp 2>/dev/null | grep -E ':53\s' || true)
-    if [[ -n "$dns_udp" ]]; then
-        echo -e "${C_GREEN}  ✅ DNS UDP:53 is listening${C_RESET}"
-        local first_line
-        first_line=$(echo "$dns_udp" | head -n1)
-        echo -e "${C_DIM}    $first_line${C_RESET}"
-    else
-        echo -e "${C_YELLOW}  ⚠️  [WARN] nothing on udp:53${C_RESET}"
-    fi
-    
-    # Check DNS port 53 (TCP)
-    local dns_tcp
-    dns_tcp=$(sudo ss -lntp 2>/dev/null | grep -E ':53\s' || true)
-    if [[ -n "$dns_tcp" ]]; then
-        echo -e "${C_GREEN}  ✅ DNS TCP:53 is listening${C_RESET}"
-        local first_line_tcp
-        first_line_tcp=$(echo "$dns_tcp" | head -n1)
-        echo -e "${C_DIM}    $first_line_tcp${C_RESET}"
-    else
-        echo -e "${C_YELLOW}  ⚠️  [WARN] nothing on tcp:53${C_RESET}"
-    fi
-    
-    # Check DNSTT port 5300 (UDP)
-    echo -e "${C_DIM}  DNSTT :5300/udp${C_RESET}"
-    local dnstt_listen
-    dnstt_listen=$(sudo ss -lunp 2>/dev/null | grep -E ':5300\s' || true)
-    if [[ -n "$dnstt_listen" ]]; then
-        echo -e "${C_GREEN}  ✅ DNSTT UDP:5300 is listening${C_RESET}"
-        local first_line_dnstt
-        first_line_dnstt=$(echo "$dnstt_listen" | head -n1)
-        echo -e "${C_DIM}    $first_line_dnstt${C_RESET}"
-    else
-        echo -e "${C_RED}  ❌ [FAIL] dnstt-server not listening on udp:5300${C_RESET}"
-    fi
-    
-    # Check SSH port 22 (TCP)
-    echo -e "${C_DIM}  SSH :22/tcp${C_RESET}"
-    local ssh_listen
-    ssh_listen=$(sudo ss -lntp 2>/dev/null | grep -E ':22\s' || true)
-    if [[ -n "$ssh_listen" ]]; then
-        echo -e "${C_GREEN}  ✅ SSH TCP:22 is listening${C_RESET}"
-        local first_line_ssh
-        first_line_ssh=$(echo "$ssh_listen" | head -n1)
-        echo -e "${C_DIM}    $first_line_ssh${C_RESET}"
-    else
-        echo -e "${C_RED}  ❌ [FAIL] sshd not listening on tcp:22${C_RESET}"
-    fi
-    
-    echo ""
-}
-
-install_dnstt() {
-    clear; show_banner
-    echo -e "${C_BOLD}${C_PURPLE}--- 📡 DNSTT (DNS Tunnel) Management ---${C_RESET}"
-    
-    # Check if DNSTT is already installed (either service file exists)
-    if [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ] || [ -f "$DNSTT_BINARY" ] || [ -f "$DNSTT_CONFIG_FILE" ]; then
-        echo -e "\n${C_YELLOW}ℹ️ DNSTT appears to be already installed.${C_RESET}"
-        show_dnstt_details
+    # Check if already installed
+    if [ -f "$SLOWDNS_SERVICE_FILE" ] || [ -f "$SLOWDNS_BINARY" ] || [ -f "$SLOWDNS_CONFIG_FILE" ]; then
+        echo -e "\n${C_YELLOW}ℹ️ SlowDNS appears to be already installed.${C_RESET}"
+        echo -e "${C_BLUE}Showing current status and management options...${C_RESET}\n"
         
-        # Check service status
-        echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "${C_BOLD}${C_BLUE}  📊 SERVICE STATUS${C_RESET}"
+        # Show status
+        local server_status="❌ INACTIVE"
+        local server_emoji="🔴"
+        if systemctl is-active --quiet slowdns.service 2>/dev/null; then
+            server_status="✅ ACTIVE"
+            server_emoji="🟢"
+        elif [ -f "$SLOWDNS_SERVICE_FILE" ]; then
+            server_status="⚠️ INSTALLED BUT NOT RUNNING"
+            server_emoji="🟡"
+        fi
+        
         echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        local dnstt_server_status="❌ INACTIVE"
-        local edns_proxy_status="❌ INACTIVE"
-        local dnstt_server_emoji="🔴"
-        local edns_proxy_emoji="🔴"
-        local needs_start=false
-        
-        if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-            dnstt_server_status="✅ ACTIVE"
-            dnstt_server_emoji="🟢"
-        elif [ -f "$DNSTT_SERVICE_FILE" ]; then
-            needs_start=true
-            dnstt_server_status="⚠️ INSTALLED BUT NOT RUNNING"
-            dnstt_server_emoji="🟡"
-        fi
-        
-        if [ -f "$DNSTT_EDNS_SERVICE" ]; then
-            if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                edns_proxy_status="✅ ACTIVE"
-                edns_proxy_emoji="🟢"
-            else
-                needs_start=true
-                edns_proxy_status="⚠️ INSTALLED BUT NOT RUNNING"
-                edns_proxy_emoji="🟡"
-            fi
-        else
-            edns_proxy_status="❌ NOT INSTALLED"
-            edns_proxy_emoji="🔴"
-        fi
-        
-        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}DNSTT Server:${C_RESET}     ${dnstt_server_emoji} ${dnstt_server_status} ${C_DIM}(port 5300)${C_RESET}"
-        echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}EDNS Proxy:${C_RESET}       ${edns_proxy_emoji} ${edns_proxy_status} ${C_DIM}(port 53)${C_RESET}"
-        
-        # Offer to start services if they're installed but not running
-        if [[ "$needs_start" == "true" ]]; then
-            echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "${C_BOLD}${C_YELLOW}  ⚠️ SERVICES INSTALLED BUT NOT RUNNING${C_RESET}"
-            echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "${C_YELLOW}DNSTT services are installed but not active. Would you like to start them now?${C_RESET}"
-            read -p "$(echo -e ${C_PROMPT}"👉 Start DNSTT services? (y/n): "${C_RESET})" start_choice
-            if [[ "$start_choice" == "y" || "$start_choice" == "Y" ]]; then
-                echo -e "\n${C_BLUE}🚀 Starting DNSTT services...${C_RESET}"
-                if [ -f "$DNSTT_SERVICE_FILE" ] && ! systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                    systemctl start dnstt.service 2>/dev/null
-                    sleep 2
-                    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                        echo -e "${C_GREEN}✅ DNSTT server started${C_RESET}"
-                    else
-                        echo -e "${C_YELLOW}⚠️ DNSTT server failed to start. Check logs: journalctl -u dnstt.service${C_RESET}"
-                    fi
-                fi
-                if [ -f "$DNSTT_EDNS_SERVICE" ] && ! systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                    systemctl start dnstt-edns-proxy.service 2>/dev/null
-                    sleep 2
-                    if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                        echo -e "${C_GREEN}✅ DNSTT EDNS proxy started${C_RESET}"
-                    else
-                        echo -e "${C_YELLOW}⚠️ DNSTT EDNS proxy failed to start. Check logs: journalctl -u dnstt-edns-proxy.service${C_RESET}"
-                    fi
-                fi
-                # Enable DNS forwarding
-                enable_dns_forwarding
-                sleep 2
-            fi
-        fi
-        
-        # Check ports - improved detection
-        echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "${C_BOLD}${C_BLUE}  🔌 PORT STATUS${C_RESET}"
+        echo -e "${C_BOLD}${C_BLUE}  📊 SLOWDNS STATUS${C_RESET}"
         echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}SlowDNS Server:${C_RESET} ${server_emoji} ${server_status}"
+        
+        # Check ports
         local port53_status="❌ NOT LISTENING"
         local port5300_status="❌ NOT LISTENING"
-        local port53_emoji="🔴"
-        local port5300_emoji="🔴"
-        local port53_process=""
-        local port5300_process=""
-        
-        # Check port 53 - try multiple methods for better detection
         if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
             port53_status="✅ LISTENING"
-            port53_emoji="🟢"
-            # Try to get process name
-            port53_process=$(ss -lunp 2>/dev/null | grep -E ':(53|:53)\s' | grep -oP 'pid=\K[0-9]+' | head -n 1)
-            if [[ -n "$port53_process" ]]; then
-                port53_process=$(ps -p "$port53_process" -o comm= 2>/dev/null | head -n 1)
-                if [[ -n "$port53_process" ]]; then
-                    port53_status="✅ LISTENING (${port53_process})"
-                fi
-            fi
-        elif netstat -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
-            port53_status="✅ LISTENING"
-            port53_emoji="🟢"
-        elif lsof -i UDP:53 2>/dev/null | grep -q LISTEN; then
-            port53_status="✅ LISTENING"
-            port53_emoji="🟢"
         fi
-        
-        # Check port 5300 - try multiple methods for better detection
         if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
             port5300_status="✅ LISTENING"
-            port5300_emoji="🟢"
-            # Try to get process name
-            port5300_process=$(ss -lunp 2>/dev/null | grep -E ':(5300|:5300)\s' | grep -oP 'pid=\K[0-9]+' | head -n 1)
-            if [[ -n "$port5300_process" ]]; then
-                port5300_process=$(ps -p "$port5300_process" -o comm= 2>/dev/null | head -n 1)
-                if [[ -n "$port5300_process" ]]; then
-                    port5300_status="✅ LISTENING (${port5300_process})"
+        fi
+        echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}Port 53 (UDP):${C_RESET}   ${port53_status}"
+        echo -e "  ${C_GREEN}3️⃣${C_RESET} ${C_WHITE}Port 5300 (UDP):${C_RESET} ${port5300_status}"
+        
+        # Management menu
+        echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "${C_BOLD}${C_BLUE}  📋 SLOWDNS MANAGEMENT OPTIONS${C_RESET}"
+        echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+        echo -e "  ${C_GREEN}1)${C_RESET} 🔄 Restart SlowDNS service"
+        echo -e "  ${C_GREEN}2)${C_RESET} 📋 View service logs"
+        echo -e "  ${C_GREEN}3)${C_RESET} 🔍 View configuration details"
+        echo -e "  ${C_GREEN}4)${C_RESET} 🔐 View/Verify Public Key"
+        echo -e "  ${C_GREEN}5)${C_RESET} ⏭️  Return to menu"
+        read -p "$(echo -e ${C_PROMPT}"👉 Select an option [5]: "${C_RESET})" view_choice
+        view_choice=${view_choice:-5}
+        
+        case $view_choice in
+            1)
+                echo -e "\n${C_BLUE}🔄 Restarting SlowDNS service...${C_RESET}"
+                systemctl restart slowdns.service 2>/dev/null
+                sleep 2
+                if systemctl is-active --quiet slowdns.service 2>/dev/null; then
+                    echo -e "${C_GREEN}✅ SlowDNS service restarted successfully${C_RESET}"
+                else
+                    echo -e "${C_YELLOW}⚠️ SlowDNS service may need attention${C_RESET}"
+                    journalctl -u slowdns.service -n 15 --no-pager
                 fi
-            fi
-        elif netstat -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
-            port5300_status="✅ LISTENING"
-            port5300_emoji="🟢"
-        elif lsof -i UDP:5300 2>/dev/null | grep -q LISTEN; then
-            port5300_status="✅ LISTENING"
-            port5300_emoji="🟢"
-        fi
-        
-        echo -e "  ${C_GREEN}3️⃣${C_RESET} ${C_WHITE}Port 53 (UDP):${C_RESET}   ${port53_emoji} ${port53_status}"
-        echo -e "  ${C_GREEN}4️⃣${C_RESET} ${C_WHITE}Port 5300 (UDP):${C_RESET} ${port5300_emoji} ${port5300_status}"
-        
-        # If services are active but ports not listening, show warning
-        if [[ "$edns_proxy_status" == "✅ ACTIVE" ]] && [[ "$port53_emoji" == "🔴" ]]; then
-            echo -e "     ${C_YELLOW}⚠️${C_RESET} ${C_DIM}Service active but port not detected. Service may need restart.${C_RESET}"
-        fi
-        if [[ "$dnstt_server_status" == "✅ ACTIVE" ]] && [[ "$port5300_emoji" == "🔴" ]]; then
-            echo -e "     ${C_YELLOW}⚠️${C_RESET} ${C_DIM}Service active but port not detected. Service may need restart.${C_RESET}"
-        fi
-        
-        # If services are not active OR ports not listening, offer to restart
-        if [[ "$dnstt_server_status" == "❌ INACTIVE" ]] || [[ "$edns_proxy_status" == "❌ INACTIVE" ]] || [[ "$port53_emoji" == "🔴" ]] || [[ "$port5300_emoji" == "🔴" ]]; then
-            echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "${C_BOLD}${C_YELLOW}  ⚠️ WARNING: DNS SERVER NOT WORKING${C_RESET}"
-            echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            
-            if [[ "$dnstt_server_status" == "❌ INACTIVE" ]] || [[ "$edns_proxy_status" == "❌ INACTIVE" ]]; then
-                echo -e "${C_YELLOW}One or more DNSTT services are not running.${C_RESET}"
-            fi
-            
-            if [[ "$port53_emoji" == "🔴" ]] || [[ "$port5300_emoji" == "🔴" ]]; then
-                echo -e "${C_YELLOW}One or more required ports are not listening.${C_RESET}"
-                if [[ "$port53_emoji" == "🔴" ]]; then
-                    echo -e "${C_DIM}  • Port 53 (EDNS Proxy) is not listening${C_RESET}"
+                press_enter
+                ;;
+            2)
+                echo -e "\n${C_BLUE}📋 SlowDNS Service Logs (last 30 lines):${C_RESET}"
+                journalctl -u slowdns.service -n 30 --no-pager
+                press_enter
+                ;;
+            3)
+                if [ -f "$SLOWDNS_CONFIG_FILE" ]; then
+                    source "$SLOWDNS_CONFIG_FILE"
+                    local vps_ip=$(_detect_server_ip)
+                    
+                    echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+                    echo -e "${C_BOLD}${C_CYAN}  📡 SLOWDNS CONFIGURATION${C_RESET}"
+                    echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+                    
+                    echo -e "\n  ${C_BOLD}${C_YELLOW}🌐 NAMESERVER HOSTNAME USAGE IN SLOWDNS:${C_RESET}"
+                    if [[ -n "$NS_DOMAIN" ]]; then
+                        echo -e "     ${C_GREEN}Nameserver Hostname:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+                        echo -e "     ${C_DIM}This hostname is used as the DNS server address on client devices${C_RESET}"
+                        echo ""
+                        if [[ -n "$vps_ip" ]]; then
+                            echo -e "     ${C_BOLD}${C_CYAN}🔗 DNS Record Chain:${C_RESET}"
+                            echo -e "        ${C_WHITE}1.${C_RESET} ${C_YELLOW}A Record:${C_RESET} $NS_DOMAIN → $vps_ip"
+                            echo -e "           ${C_DIM}(Maps nameserver hostname to server IP)${C_RESET}"
+                            echo -e "        ${C_WHITE}2.${C_RESET} ${C_YELLOW}NS Record:${C_RESET} @ → $NS_DOMAIN"
+                            echo -e "           ${C_DIM}(Points domain to nameserver hostname)${C_RESET}"
+                            echo ""
+                            echo -e "     ${C_BOLD}${C_MAGENTA}📱 How Clients Use the Nameserver Hostname:${C_RESET}"
+                            echo -e "        ${C_WHITE}1.${C_RESET} Client sets DNS to: ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+                            echo -e "        ${C_WHITE}2.${C_RESET} DNS resolver queries: ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}$vps_ip${C_RESET}"
+                            echo -e "        ${C_WHITE}3.${C_RESET} Client connects to: ${C_YELLOW}$vps_ip:53${C_RESET} (SlowDNS server)"
+                            echo -e "        ${C_WHITE}4.${C_RESET} SlowDNS processes tunnel traffic"
+                            echo ""
+                            
+                            # Verify DNS record
+                            echo -e "     ${C_BLUE}🔍 Verifying DNS A Record...${C_RESET}"
+                            local resolved_ip=""
+                            if command -v dig &> /dev/null; then
+                                resolved_ip=$(dig +short A "$NS_DOMAIN" 2>/dev/null | grep -E '^[0-9]{1,3}\.' | head -n1)
+                            elif command -v nslookup &> /dev/null; then
+                                resolved_ip=$(nslookup "$NS_DOMAIN" 2>/dev/null | grep -A1 "Name:" | grep "Address:" | awk '{print $2}' | head -n1)
+                            fi
+                            
+                            if [[ -n "$resolved_ip" ]]; then
+                                if [[ "$resolved_ip" == "$vps_ip" ]]; then
+                                    echo -e "        ${C_GREEN}✅ DNS A record is correct: ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}$resolved_ip${C_RESET}"
+                                else
+                                    echo -e "        ${C_YELLOW}⚠️ DNS A record points to different IP:${C_RESET}"
+                                    echo -e "           ${C_YELLOW}Current:${C_RESET} $NS_DOMAIN → $resolved_ip"
+                                    echo -e "           ${C_YELLOW}Expected:${C_RESET} $NS_DOMAIN → $vps_ip"
+                                    echo -e "           ${C_DIM}Please update the A record at your DNS provider${C_RESET}"
+                                fi
+                            else
+                                echo -e "        ${C_YELLOW}⚠️ DNS A record not found or not yet propagated${C_RESET}"
+                                echo -e "           ${C_DIM}Please ensure: $NS_DOMAIN → $vps_ip${C_RESET}"
+                            fi
+                        fi
+                    fi
+                    
+                    echo -e "\n  ${C_BOLD}${C_YELLOW}🔌 TUNNEL CONFIGURATION:${C_RESET}"
+                    if [[ -n "$TUNNEL_DOMAIN" ]]; then
+                        echo -e "     ${C_GREEN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+                    fi
+                    if [[ -n "$FORWARD_DESC" ]]; then
+                        echo -e "     ${C_GREEN}Forward Target:${C_RESET} ${C_YELLOW}$FORWARD_DESC${C_RESET}"
+                    fi
+                    if [[ -n "$MTU_VALUE" ]]; then
+                        echo -e "     ${C_GREEN}MTU:${C_RESET} ${C_YELLOW}$MTU_VALUE${C_RESET}"
+                    fi
+                    
+                    echo -e "\n  ${C_BOLD}${C_YELLOW}🔐 AUTHENTICATION:${C_RESET}"
+                    if [[ -n "$PUBLIC_KEY" ]]; then
+                        echo -e "     ${C_GREEN}Public Key:${C_RESET} ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+                    fi
+                else
+                    echo -e "${C_YELLOW}⚠️ Configuration file not found${C_RESET}"
                 fi
-                if [[ "$port5300_emoji" == "🔴" ]]; then
-                    echo -e "${C_DIM}  • Port 5300 (DNSTT Server) is not listening${C_RESET}"
+                press_enter
+                ;;
+            4)
+                if [ -f "$SLOWDNS_KEYS_DIR/server.pub" ]; then
+                    echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+                    echo -e "${C_BOLD}${C_CYAN}  🔐 SLOWDNS PUBLIC KEY${C_RESET}"
+                    echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+                    local pubkey=$(cat "$SLOWDNS_KEYS_DIR/server.pub" 2>/dev/null | tr -d '\n\r')
+                    echo -e "  ${C_YELLOW}$pubkey${C_RESET}"
+                    echo -e "\n  ${C_DIM}📄 File: $SLOWDNS_KEYS_DIR/server.pub${C_RESET}"
+                else
+                    echo -e "${C_YELLOW}⚠️ Public key file not found${C_RESET}"
                 fi
-            fi
-            
-            echo -e "\n${C_BLUE}What would you like to do?${C_RESET}"
-            echo -e "  ${C_GREEN}1)${C_RESET} 🔄 Restart all DNSTT services"
-            echo -e "  ${C_GREEN}2)${C_RESET} 📋 View service logs"
-            echo -e "  ${C_GREEN}3)${C_RESET} 🔍 Run DNSTT diagnostics (NS check + ports)"
-            echo -e "  ${C_GREEN}4)${C_RESET} ⏭️  Continue (do nothing)"
-            read -p "$(echo -e ${C_PROMPT}"👉 Select an option [1]: "${C_RESET})" restart_choice
-            restart_choice=${restart_choice:-1}
-            
-            case $restart_choice in
-                1)
-                    echo -e "\n${C_BLUE}🔄 Starting/Restarting DNSTT services...${C_RESET}"
-                    
-                    # Start/restart DNSTT server
-                    if [ -f "$DNSTT_SERVICE_FILE" ]; then
-                        if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                            systemctl restart dnstt.service 2>/dev/null
-                            echo -e "${C_BLUE}  ↻ Restarting DNSTT server...${C_RESET}"
-                        else
-                            systemctl start dnstt.service 2>/dev/null
-                            systemctl enable dnstt.service 2>/dev/null
-                            echo -e "${C_BLUE}  ▶️ Starting DNSTT server...${C_RESET}"
-                        fi
-                        sleep 2
-                        if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                            echo -e "${C_GREEN}✅ DNSTT server is now active.${C_RESET}"
-                        else
-                            echo -e "${C_RED}❌ Failed to start DNSTT server.${C_RESET}"
-                            echo -e "${C_YELLOW}  Showing last 15 lines of logs:${C_RESET}"
-                            journalctl -u dnstt.service -n 15 --no-pager
-                        fi
-                    else
-                        echo -e "${C_YELLOW}⚠️ DNSTT service file not found.${C_RESET}"
-                    fi
-                    
-                    sleep 1
-                    
-                    # Start/restart EDNS proxy
-                    if [ -f "$DNSTT_EDNS_SERVICE" ]; then
-                        if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                            systemctl restart dnstt-edns-proxy.service 2>/dev/null
-                            echo -e "${C_BLUE}  ↻ Restarting EDNS proxy...${C_RESET}"
-                        else
-                            systemctl start dnstt-edns-proxy.service 2>/dev/null
-                            systemctl enable dnstt-edns-proxy.service 2>/dev/null
-                            echo -e "${C_BLUE}  ▶️ Starting EDNS proxy...${C_RESET}"
-                        fi
-                        sleep 2
-                        if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                            echo -e "${C_GREEN}✅ EDNS proxy is now active.${C_RESET}"
-                        else
-                            echo -e "${C_RED}❌ Failed to start EDNS proxy.${C_RESET}"
-                            echo -e "${C_YELLOW}  Showing last 15 lines of logs:${C_RESET}"
-                            journalctl -u dnstt-edns-proxy.service -n 15 --no-pager
-                        fi
-                    else
-                        echo -e "${C_YELLOW}⚠️ EDNS proxy service file not found.${C_RESET}"
-                    fi
-                    
-                    # Enable DNS forwarding
-                    enable_dns_forwarding
-                    
-                    sleep 2
-                    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-                    echo -e "${C_BOLD}${C_BLUE}  📊 UPDATED STATUS${C_RESET}"
-                    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-                    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}DNSTT Server:${C_RESET}     🟢 ✅ ACTIVE"
-                    else
-                        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}DNSTT Server:${C_RESET}     🔴 ❌ INACTIVE"
-                        echo -e "     ${C_YELLOW}💡${C_RESET} ${C_DIM}Check logs: journalctl -u dnstt.service -n 20${C_RESET}"
-                    fi
-                    
-                    if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                        echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}EDNS Proxy:${C_RESET}       🟢 ✅ ACTIVE"
-                    else
-                        echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}EDNS Proxy:${C_RESET}       🔴 ❌ INACTIVE"
-                        echo -e "     ${C_YELLOW}💡${C_RESET} ${C_DIM}Check logs: journalctl -u dnstt-edns-proxy.service -n 20${C_RESET}"
-                    fi
-                    ;;
-                2)
-                    echo -e "\n${C_BLUE}📋 DNSTT Server Logs (last 20 lines):${C_RESET}"
-                    journalctl -u dnstt.service -n 20 --no-pager
-                    if [ -f "$DNSTT_EDNS_SERVICE" ]; then
-                        echo -e "\n${C_BLUE}📋 EDNS Proxy Logs (last 20 lines):${C_RESET}"
-                        journalctl -u dnstt-edns-proxy.service -n 20 --no-pager
-                    fi
-                    ;;
-                3)
-                    check_dnstt_diagnostics
-                    press_enter
-                    ;;
-                4)
-                    echo -e "${C_DIM}Skipping restart...${C_RESET}"
-                    ;;
-            esac
-        else
-            echo -e "\n${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "${C_BOLD}${C_GREEN}  ✅ ALL SERVICES RUNNING CORRECTLY${C_RESET}"
-            echo -e "${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "  ${C_GREEN}🎉${C_RESET} ${C_WHITE}All DNSTT services are active and ports are listening!${C_RESET}"
-            
-            # Comprehensive view menu
-            echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "${C_BOLD}${C_BLUE}  📋 DNSTT MANAGEMENT OPTIONS${C_RESET}"
-            echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "  ${C_GREEN}1)${C_RESET} 🔄 Restart all DNSTT services"
-            echo -e "  ${C_GREEN}2)${C_RESET} 📋 View service logs"
-            echo -e "  ${C_GREEN}3)${C_RESET} 🔍 Run DNSTT diagnostics (NS check + ports)"
-            echo -e "  ${C_GREEN}4)${C_RESET} 🔐 Verify Public Key"
-            echo -e "  ${C_GREEN}5)${C_RESET} ⏭️  Return to menu"
-            read -p "$(echo -e ${C_PROMPT}"👉 Select an option [5]: "${C_RESET})" view_choice
-            view_choice=${view_choice:-5}
-            
-            case $view_choice in
-                1)
-                    echo -e "\n${C_BLUE}🔄 Starting/Restarting DNSTT services...${C_RESET}"
-                    
-                    # Start/restart DNSTT server
-                    if [ -f "$DNSTT_SERVICE_FILE" ]; then
-                        if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                            systemctl restart dnstt.service 2>/dev/null
-                            echo -e "${C_BLUE}  ↻ Restarting DNSTT server...${C_RESET}"
-                        else
-                            systemctl start dnstt.service 2>/dev/null
-                            systemctl enable dnstt.service 2>/dev/null
-                            echo -e "${C_BLUE}  ▶️ Starting DNSTT server...${C_RESET}"
-                        fi
-                        sleep 2
-                        if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                            echo -e "${C_GREEN}✅ DNSTT server is now active.${C_RESET}"
-                        else
-                            echo -e "${C_RED}❌ Failed to start DNSTT server.${C_RESET}"
-                            echo -e "${C_YELLOW}  Showing last 15 lines of logs:${C_RESET}"
-                            journalctl -u dnstt.service -n 15 --no-pager
-                        fi
-                    else
-                        echo -e "${C_YELLOW}⚠️ DNSTT service file not found.${C_RESET}"
-                    fi
-                    
-                    sleep 1
-                    
-                    # Start/restart EDNS proxy
-                    if [ -f "$DNSTT_EDNS_SERVICE" ]; then
-                        if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                            systemctl restart dnstt-edns-proxy.service 2>/dev/null
-                            echo -e "${C_BLUE}  ↻ Restarting EDNS proxy...${C_RESET}"
-                        else
-                            systemctl start dnstt-edns-proxy.service 2>/dev/null
-                            systemctl enable dnstt-edns-proxy.service 2>/dev/null
-                            echo -e "${C_BLUE}  ▶️ Starting EDNS proxy...${C_RESET}"
-                        fi
-                        sleep 2
-                        if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                            echo -e "${C_GREEN}✅ EDNS proxy is now active.${C_RESET}"
-                        else
-                            echo -e "${C_RED}❌ Failed to start EDNS proxy.${C_RESET}"
-                            echo -e "${C_YELLOW}  Showing last 15 lines of logs:${C_RESET}"
-                            journalctl -u dnstt-edns-proxy.service -n 15 --no-pager
-                        fi
-                    else
-                        echo -e "${C_YELLOW}⚠️ EDNS proxy service file not found.${C_RESET}"
-                    fi
-                    
-                    # Enable DNS forwarding
-                    enable_dns_forwarding
-                    
-                    sleep 2
-                    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-                    echo -e "${C_BOLD}${C_BLUE}  📊 UPDATED STATUS${C_RESET}"
-                    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-                    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}DNSTT Server:${C_RESET}     🟢 ✅ ACTIVE"
-                    else
-                        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}DNSTT Server:${C_RESET}     🔴 ❌ INACTIVE"
-                        echo -e "     ${C_YELLOW}💡${C_RESET} ${C_DIM}Check logs: journalctl -u dnstt.service -n 20${C_RESET}"
-                    fi
-                    
-                    if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                        echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}EDNS Proxy:${C_RESET}       🟢 ✅ ACTIVE"
-                    else
-                        echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}EDNS Proxy:${C_RESET}       🔴 ❌ INACTIVE"
-                        echo -e "     ${C_YELLOW}💡${C_RESET} ${C_DIM}Check logs: journalctl -u dnstt-edns-proxy.service -n 20${C_RESET}"
-                    fi
-                    press_enter
-                    ;;
-                2)
-                    echo -e "\n${C_BLUE}📋 DNSTT Server Logs (last 20 lines):${C_RESET}"
-                    journalctl -u dnstt.service -n 20 --no-pager
-                    if [ -f "$DNSTT_EDNS_SERVICE" ]; then
-                        echo -e "\n${C_BLUE}📋 EDNS Proxy Logs (last 20 lines):${C_RESET}"
-                        journalctl -u dnstt-edns-proxy.service -n 20 --no-pager
-                    fi
-                    press_enter
-                    ;;
-                3)
-                    check_dnstt_diagnostics
-                    press_enter
-                    ;;
-                4)
-                    verify_dnstt_keys
-                    press_enter
-                    ;;
-                5)
-                    ;;
-                *)
-                    ;;
-            esac
-        fi
-        
+                press_enter
+                ;;
+            5) return ;;
+            *) return ;;
+        esac
         return
     fi
     
-    # --- FIX: Force release of Port 53 / Disable systemd-resolved ---
-    echo -e "${C_GREEN}⚙️ Forcing release of Port 53 (stopping systemd-resolved)...${C_RESET}"
-    
-    # Stop systemd-resolved
-    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-        systemctl stop systemd-resolved 2>/dev/null
-        sleep 1
+    # Start installation
+    echo -e "\n${C_BLUE}📋 SlowDNS Installation Requirements:${C_RESET}"
+    echo -e "  ${C_WHITE}1.${C_RESET} A domain name for nameserver (e.g., ns1.yourdomain.com)"
+    echo -e "  ${C_WHITE}2.${C_RESET} DNS access to create A and NS records"
+    echo -e "  ${C_WHITE}3.${C_RESET} Port 53 (UDP) must be available"
+    echo ""
+    read -p "$(echo -e ${C_PROMPT}"👉 Continue with installation? (y/n): "${C_RESET})" confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo -e "${C_YELLOW}Installation cancelled.${C_RESET}"
+        return
     fi
     
-    # Disable systemd-resolved to prevent restart
-    if systemctl is-enabled --quiet systemd-resolved 2>/dev/null; then
-        systemctl disable systemd-resolved 2>/dev/null
-        sleep 1
-    fi
-    
-    # Mask systemd-resolved to prevent any automatic start
-    systemctl mask systemd-resolved 2>/dev/null
-    
-    # Handle resolv.conf - Use 127.0.0.1 for DNSTT to work properly
-    # The EDNS proxy on port 53 will forward regular DNS queries to external DNS servers
-    chattr -i /etc/resolv.conf 2>/dev/null
-    if [ -L /etc/resolv.conf ]; then
-        rm -f /etc/resolv.conf
-    fi
-    rm -f /etc/resolv.conf
-    echo "nameserver 127.0.0.1" > /etc/resolv.conf
-    echo "nameserver $DNS_PRIMARY" >> /etc/resolv.conf
-    echo "nameserver $DNS_SECONDARY" >> /etc/resolv.conf
-    chattr +i /etc/resolv.conf 2>/dev/null
-    echo -e "${C_GREEN}✅ Configured /etc/resolv.conf to use localhost (127.0.0.1) for DNS forwarding${C_RESET}"
-    
-    # Kill any remaining systemd-resolved processes
-    pkill -9 systemd-resolved 2>/dev/null
-    sleep 2
-    
-    echo -e "${C_GREEN}✅ Port 53 preparation completed.${C_RESET}"
-    # ----------------------------------------------------------------
-    
-    echo -e "\n${C_BLUE}🔎 Checking if port 53 (UDP) is available...${C_RESET}"
-    if ss -lunp | grep -q ':53\s'; then
-        local port53_pid
-        port53_pid=$(ss -lunp | grep ':53\s' | grep -oP 'pid=\K[0-9]+' | head -n 1)
-        local port53_process
-        if [[ -n "$port53_pid" ]]; then
-            port53_process=$(ps -p "$port53_pid" -o comm= 2>/dev/null)
-        fi
-        if [[ "$port53_process" == "systemd-resolve" ]]; then
-            echo -e "${C_YELLOW}⚠️ Warning: Port 53 is in use by 'systemd-resolved'.${C_RESET}"
-            echo -e "${C_YELLOW}This is the system's DNS stub resolver. It must be disabled to run DNSTT.${C_RESET}"
-            read -p "👉 Allow the script to automatically disable it and reconfigure DNS? (y/n): " resolve_confirm
+    # Check port 53 availability
+    echo -e "\n${C_BLUE}🔎 Checking port 53 (UDP) availability...${C_RESET}"
+    if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+        local port53_process=$(ss -lunp 2>/dev/null | grep -E ':(53|:53)\s' | head -n1)
+        if echo "$port53_process" | grep -qE 'systemd-resolve|systemd-resolved'; then
+            echo -e "${C_YELLOW}⚠️ Port 53 is in use by systemd-resolved.${C_RESET}"
+            read -p "👉 Allow the script to disable systemd-resolved? (y/n): " resolve_confirm
             if [[ "$resolve_confirm" == "y" || "$resolve_confirm" == "Y" ]]; then
-                echo -e "${C_GREEN}⚙️ Stopping and disabling systemd-resolved to free port 53...${C_RESET}"
-                systemctl stop systemd-resolved
-                systemctl disable systemd-resolved
+                systemctl stop systemd-resolved 2>/dev/null
+                systemctl disable systemd-resolved 2>/dev/null
                 systemctl mask systemd-resolved 2>/dev/null
-                chattr -i /etc/resolv.conf &>/dev/null
+                chattr -i /etc/resolv.conf 2>/dev/null
                 rm -f /etc/resolv.conf
                 echo "nameserver 127.0.0.1" > /etc/resolv.conf
                 echo "nameserver $DNS_PRIMARY" >> /etc/resolv.conf
                 echo "nameserver $DNS_SECONDARY" >> /etc/resolv.conf
-                chattr +i /etc/resolv.conf
-                echo -e "${C_GREEN}✅ Port 53 has been freed and DNS configured for DNSTT (127.0.0.1).${C_RESET}"
+                chattr +i /etc/resolv.conf 2>/dev/null
+                pkill -9 systemd-resolved 2>/dev/null
+                echo -e "${C_GREEN}✅ Port 53 has been freed${C_RESET}"
             else
                 echo -e "${C_RED}❌ Cannot proceed without freeing port 53. Aborting.${C_RESET}"
                 return
@@ -2140,42 +1597,28 @@ install_dnstt() {
     else
         echo -e "${C_GREEN}✅ Port 53 (UDP) is free to use.${C_RESET}"
     fi
-
+    
     check_and_open_firewall_port 53 udp || return
     
-    echo -e "\n${C_BLUE}🔎 Checking if port 5300 (UDP) is available...${C_RESET}"
-    if ss -lunp | grep -q ':5300\s'; then
-        echo -e "${C_YELLOW}⚠️ Warning: Port 5300 is already in use.${C_RESET}"
+    echo -e "\n${C_BLUE}🔎 Checking port 5300 (UDP) availability...${C_RESET}"
+    if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
         check_and_free_ports "5300" || return
     else
         echo -e "${C_GREEN}✅ Port 5300 (UDP) is free to use.${C_RESET}"
     fi
     check_and_open_firewall_port 5300 udp || return
-
-    # Fixed forward target: SSH on 127.0.0.1:22
-    local forward_port="22"
-    local forward_desc="SSH (port 22)"
-    local FORWARD_TARGET="127.0.0.1:22"
-    echo -e "${C_GREEN}ℹ️ DNSTT will forward to SSH on 127.0.0.1:22 (fixed configuration).${C_RESET}"
     
+    # Get configuration
     local NS_DOMAIN=""
     local TUNNEL_DOMAIN=""
-    local DNSTT_RECORDS_MANAGED="false"
-    local NS_SUBDOMAIN=""
-    local TUNNEL_SUBDOMAIN=""
-    local HAS_IPV6="false"
-
-    echo -e "${C_BLUE}📋 DNSTT Nameserver Configuration${C_RESET}"
-    echo -e "${C_YELLOW}💡 Understanding DNS Records: NS records must point to HOSTNAMES, not IP addresses${C_RESET}"
-    echo ""
+    local MTU_VALUE=""
+    local FORWARD_TARGET="127.0.0.1:22"
     
     # Detect VPS information
-    local vps_ip
-    local vps_hostname
-    vps_ip=$(_detect_server_ip)
-    vps_hostname=$(_detect_server_hostname)
+    local vps_ip=$(_detect_server_ip)
+    local vps_hostname=$(_detect_server_hostname)
     
-    echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
     echo -e "${C_BOLD}${C_CYAN}  📡 VPS SERVER INFORMATION${C_RESET}"
     echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
     if [[ -n "$vps_hostname" ]]; then
@@ -2189,20 +1632,40 @@ install_dnstt() {
     echo ""
     
     echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-    echo -e "${C_BOLD}${C_YELLOW}  📝 DNS CONFIGURATION REQUIREMENTS${C_RESET}"
+    echo -e "${C_BOLD}${C_YELLOW}  📝 DNS CONFIGURATION REQUIREMENTS & HOW IT WORKS${C_RESET}"
     echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-    echo -e "  ${C_WHITE}1.${C_RESET} You need to create a ${C_GREEN}HOSTNAME${C_RESET} (e.g., ns1.yourdomain.com)"
-    echo -e "  ${C_WHITE}2.${C_RESET} Create an ${C_GREEN}A record${C_RESET}: ${C_YELLOW}ns1.yourdomain.com → $vps_ip${C_RESET}"
-    echo -e "  ${C_WHITE}3.${C_RESET} Point your ${C_GREEN}NS record${C_RESET} to that hostname"
-    echo -e "  ${C_RED}❌${C_RESET} ${C_RED}WRONG: NS record pointing directly to IP address${C_RESET}"
-    echo -e "  ${C_GREEN}✅${C_RESET} ${C_GREEN}CORRECT: NS record pointing to hostname (which has A record → IP)${C_RESET}"
+    echo -e "\n  ${C_BOLD}${C_CYAN}🔍 Understanding Nameserver Hostname in SlowDNS:${C_RESET}\n"
+    echo -e "  ${C_WHITE}Step 1:${C_RESET} Create a ${C_GREEN}HOSTNAME${C_RESET} (e.g., ${C_YELLOW}ns1.yourdomain.com${C_RESET})"
+    echo -e "          ${C_DIM}This hostname will be used as your nameserver${C_RESET}"
+    echo ""
+    echo -e "  ${C_WHITE}Step 2:${C_RESET} Create an ${C_GREEN}A record${C_RESET} for this hostname:"
+    echo -e "          ${C_YELLOW}ns1.yourdomain.com${C_RESET} → ${C_YELLOW}$vps_ip${C_RESET}"
+    echo -e "          ${C_DIM}This maps the nameserver hostname to your server IP${C_RESET}"
+    echo ""
+    echo -e "  ${C_WHITE}Step 3:${C_RESET} Point your ${C_GREEN}NS record${C_RESET} to that hostname:"
+    echo -e "          ${C_YELLOW}@${C_RESET} (or your domain) → ${C_YELLOW}ns1.yourdomain.com${C_RESET}"
+    echo -e "          ${C_DIM}This tells clients that 'ns1.yourdomain.com' is the nameserver${C_RESET}"
+    echo ""
+    echo -e "  ${C_BOLD}${C_GREEN}✅ CORRECT DNS Hierarchy:${C_RESET}"
+    echo -e "     ${C_CYAN}NS Record:${C_RESET} ${C_YELLOW}yourdomain.com${C_RESET} → ${C_YELLOW}ns1.yourdomain.com${C_RESET}"
+    echo -e "     ${C_CYAN}A Record:${C_RESET}  ${C_YELLOW}ns1.yourdomain.com${C_RESET} → ${C_YELLOW}$vps_ip${C_RESET}"
+    echo ""
+    echo -e "  ${C_BOLD}${C_RED}❌ WRONG (Common Mistake):${C_RESET}"
+    echo -e "     ${C_RED}NS Record pointing directly to IP: yourdomain.com → $vps_ip${C_RESET}"
+    echo -e "     ${C_RED}This will NOT work! NS records must point to hostnames.${C_RESET}"
+    echo ""
+    echo -e "  ${C_BOLD}${C_MAGENTA}💡 How SlowDNS Uses the Nameserver Hostname:${C_RESET}"
+    echo -e "     ${C_WHITE}1.${C_RESET} Client sets DNS to: ${C_YELLOW}ns1.yourdomain.com${C_RESET}"
+    echo -e "     ${C_WHITE}2.${C_RESET} DNS resolver looks up: ${C_YELLOW}ns1.yourdomain.com${C_RESET} → ${C_YELLOW}$vps_ip${C_RESET}"
+    echo -e "     ${C_WHITE}3.${C_RESET} Client connects to: ${C_YELLOW}$vps_ip:53${C_RESET} (your SlowDNS server)"
+    echo -e "     ${C_WHITE}4.${C_RESET} SlowDNS handles the DNS tunnel traffic"
     echo ""
     
+    # Get nameserver domain
     local ns_domain_valid=false
     while [[ "$ns_domain_valid" == "false" ]]; do
         read -p "👉 Enter your nameserver HOSTNAME (e.g., ns1.yourdomain.com, NOT an IP): " NS_DOMAIN
         
-        # Validate the nameserver domain
         local validation_result
         validation_result=$(_validate_nameserver_domain "$NS_DOMAIN" 2>&1)
         
@@ -2210,20 +1673,42 @@ install_dnstt() {
             ns_domain_valid=true
             echo -e "${C_GREEN}✅ Nameserver hostname validated: $NS_DOMAIN${C_RESET}"
             
-            # Show what DNS records need to be created
             echo ""
             echo -e "${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "${C_BOLD}${C_GREEN}  ✅ REQUIRED DNS RECORDS TO CREATE${C_RESET}"
+            echo -e "${C_BOLD}${C_GREEN}  ✅ REQUIRED DNS RECORDS TO CREATE AT YOUR DNS PROVIDER${C_RESET}"
             echo -e "${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
             if [[ -n "$vps_ip" ]]; then
-                echo -e "  ${C_GREEN}A Record:${C_RESET}"
-                echo -e "    ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}$vps_ip${C_RESET}"
+                echo -e "\n  ${C_BOLD}${C_YELLOW}📋 RECORD 1: A Record (for Nameserver Hostname)${C_RESET}"
+                echo -e "     ${C_GREEN}Type:${C_RESET} A"
+                echo -e "     ${C_GREEN}Name:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+                echo -e "     ${C_GREEN}Value:${C_RESET} ${C_YELLOW}$vps_ip${C_RESET}"
+                echo -e "     ${C_GREEN}TTL:${C_RESET} 300 (or default)"
+                echo -e "     ${C_DIM}Purpose: Maps the nameserver hostname to your server IP${C_RESET}"
                 echo ""
-                echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}After creating the A record above, configure your domain's NS record to point to:${C_RESET}"
-                echo -e "    ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+                echo -e "  ${C_BOLD}${C_YELLOW}📋 RECORD 2: NS Record (for Your Domain)${C_RESET}"
+                echo -e "     ${C_GREEN}Type:${C_RESET} NS"
+                echo -e "     ${C_GREEN}Name:${C_RESET} ${C_YELLOW}@${C_RESET} (or your root domain)"
+                echo -e "     ${C_GREEN}Value:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+                echo -e "     ${C_GREEN}TTL:${C_RESET} 300 (or default)"
+                echo -e "     ${C_DIM}Purpose: Points your domain's nameserver to the hostname above${C_RESET}"
+                echo ""
+                echo -e "  ${C_BOLD}${C_CYAN}🔗 Complete DNS Chain:${C_RESET}"
+                echo -e "     ${C_WHITE}1.${C_RESET} ${C_YELLOW}yourdomain.com${C_RESET} (NS) → ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+                echo -e "     ${C_WHITE}2.${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET} (A) → ${C_YELLOW}$vps_ip${C_RESET}"
+                echo -e "     ${C_WHITE}3.${C_RESET} Client uses ${C_YELLOW}$NS_DOMAIN${C_RESET} as DNS → Resolves to ${C_YELLOW}$vps_ip:53${C_RESET}"
+                echo ""
+                echo -e "  ${C_BOLD}${C_MAGENTA}📱 Client Configuration:${C_RESET}"
+                echo -e "     ${C_WHITE}•${C_RESET} Set DNS to: ${C_YELLOW}$NS_DOMAIN${C_RESET} (nameserver hostname)"
+                echo -e "     ${C_WHITE}•${C_RESET} Or set DNS to: ${C_YELLOW}$vps_ip${C_RESET} (direct IP, if A record exists)"
+                echo ""
+                echo -e "  ${C_BOLD}${C_GREEN}💡 How SlowDNS Uses the Nameserver Hostname:${C_RESET}"
+                echo -e "     ${C_DIM}The nameserver hostname ($NS_DOMAIN) is what clients will configure${C_RESET}"
+                echo -e "     ${C_DIM}as their DNS server. When clients query this nameserver, it resolves${C_RESET}"
+                echo -e "     ${C_DIM}to your server IP ($vps_ip) where SlowDNS is listening on port 53.${C_RESET}"
             else
                 echo -e "  ${C_YELLOW}⚠️${C_RESET} ${C_RED}Could not detect VPS IP. You need to manually create:${C_RESET}"
-                echo -e "    ${C_GREEN}A Record:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}[Your VPS IP Address]${C_RESET}"
+                echo -e "     ${C_GREEN}A Record:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}[Your VPS IP Address]${C_RESET}"
+                echo -e "     ${C_GREEN}NS Record:${C_RESET} ${C_YELLOW}@${C_RESET} → ${C_YELLOW}$NS_DOMAIN${C_RESET}"
             fi
         else
             echo -e "${C_RED}❌ Validation failed:${C_RESET}"
@@ -2232,469 +1717,104 @@ install_dnstt() {
         fi
     done
     
-    # Fixed tunnel domain: idd.voltrontechtx.shop
-    TUNNEL_DOMAIN="idd.voltrontechtx.shop"
-    echo -e "${C_GREEN}ℹ️ Using fixed tunnel domain: $TUNNEL_DOMAIN${C_RESET}"
+    # Get tunnel domain
+    read -p "👉 Enter tunnel domain (e.g., tunnel.yourdomain.com) [default: tunnel.${NS_DOMAIN#*.}]: " TUNNEL_DOMAIN
+    TUNNEL_DOMAIN=${TUNNEL_DOMAIN:-"tunnel.${NS_DOMAIN#*.}"}
+    echo -e "${C_GREEN}✅ Using tunnel domain: $TUNNEL_DOMAIN${C_RESET}"
     
-    # Fixed MTU: 512 (not configurable)
-    local mtu_value="512"
-    local mtu_string=" -mtu 512"
-    echo -e "${C_GREEN}ℹ️ Using fixed MTU: 512${C_RESET}"
-
-    echo -e "\n${C_BLUE}📥 Downloading pre-compiled DNSTT server binary...${C_RESET}"
-    local arch
-    arch=$(uname -m)
+    # Get MTU
+    read -p "👉 Enter MTU value (512, 1200, or 1800) [default: 1200]: " MTU_VALUE
+    MTU_VALUE=${MTU_VALUE:-"1200"}
+    if [[ ! "$MTU_VALUE" =~ ^(512|1200|1800)$ ]]; then
+        echo -e "${C_YELLOW}⚠️ Invalid MTU, using default 1200${C_RESET}"
+        MTU_VALUE="1200"
+    fi
+    echo -e "${C_GREEN}✅ Using MTU: $MTU_VALUE${C_RESET}"
+    
+    # Forward target
+    echo -e "\n${C_BLUE}📡 Forward Target Configuration:${C_RESET}"
+    echo -e "  ${C_GREEN}1)${C_RESET} SSH (port 22)"
+    echo -e "  ${C_GREEN}2)${C_RESET} V2Ray/XRay (port 8787)"
+    read -p "$(echo -e ${C_PROMPT}"👉 Select forward target [1]: "${C_RESET})" forward_choice
+    forward_choice=${forward_choice:-1}
+    
+    case $forward_choice in
+        1) FORWARD_TARGET="127.0.0.1:22"; FORWARD_DESC="SSH (port 22)" ;;
+        2) FORWARD_TARGET="127.0.0.1:8787"; FORWARD_DESC="V2Ray/XRay (port 8787)" ;;
+        *) FORWARD_TARGET="127.0.0.1:22"; FORWARD_DESC="SSH (port 22)" ;;
+    esac
+    echo -e "${C_GREEN}✅ Forward target: $FORWARD_DESC${C_RESET}"
+    
+    # Create directories
+    echo -e "\n${C_BLUE}📁 Creating directories...${C_RESET}"
+    mkdir -p "$SLOWDNS_DIR" "$SLOWDNS_KEYS_DIR" || {
+        echo -e "${C_RED}❌ Failed to create directories.${C_RESET}"
+        return 1
+    }
+    
+    # Download SlowDNS binary (using dnstt-server as base, compatible implementation)
+    echo -e "\n${C_BLUE}📥 Downloading SlowDNS server binary...${C_RESET}"
+    local arch=$(uname -m)
     local binary_url=""
+    
     if [[ "$arch" == "x86_64" ]]; then
-        binary_url="https://dnstt.network/dnstt-server-linux-amd64"
-        echo -e "${C_BLUE}ℹ️ Detected x86_64 (amd64) architecture.${C_RESET}"
+        binary_url="https://github.com/net4people/bbs/raw/master/misc/dnstt-server/dnstt-server-linux-amd64"
     elif [[ "$arch" == "aarch64" || "$arch" == "arm64" ]]; then
-        binary_url="https://dnstt.network/dnstt-server-linux-arm64"
-        echo -e "${C_BLUE}ℹ️ Detected ARM64 architecture.${C_RESET}"
+        binary_url="https://github.com/net4people/bbs/raw/master/misc/dnstt-server/dnstt-server-linux-arm64"
     else
-        echo -e "\n${C_RED}❌ Unsupported architecture: $arch. Cannot install DNSTT.${C_RESET}"
-        return
-    fi
-    
-    if ! curl -sL "$binary_url" -o "$DNSTT_BINARY"; then
-        echo -e "\n${C_RED}❌ Failed to download the DNSTT binary from $binary_url${C_RESET}"
-        echo -e "${C_YELLOW}ℹ️ Please check your internet connection and try again.${C_RESET}"
-        return 1
-    fi
-    if [[ ! -f "$DNSTT_BINARY" ]] || [[ ! -s "$DNSTT_BINARY" ]]; then
-        echo -e "\n${C_RED}❌ Downloaded file is empty or missing.${C_RESET}"
-        return 1
-    fi
-    chmod +x "$DNSTT_BINARY"
-    
-    # Use /root/dnstt/ as keys directory (as specified)
-    DNSTT_KEYS_DIR="/root/dnstt"
-    
-    # Copy binary to /root/dnstt/ for service file and ensure keys directory exists
-    mkdir -p "$DNSTT_KEYS_DIR" || {
-        echo -e "${C_RED}❌ Failed to create keys directory.${C_RESET}"
-        return 1
-    }
-    cp "$DNSTT_BINARY" "$DNSTT_KEYS_DIR/dnstt-server" 2>/dev/null || {
-        echo -e "${C_YELLOW}⚠️ Warning: Could not copy binary to /root/dnstt/, service will use /usr/local/bin/ path${C_RESET}"
-    }
-    chmod +x "$DNSTT_KEYS_DIR/dnstt-server" 2>/dev/null || true
-
-    echo -e "${C_BLUE}🔐 Setting up cryptographic keys...${C_RESET}"
-    
-    # Constant public key that must never change
-    CONSTANT_PUBLIC_KEY="f7faa7519d38fdda4c07eb7804c4fffef5d8a6e866debda48fe1f37035abf647"
-    
-    # Check if keys already exist - DO NOT regenerate if server.key exists
-    if [[ -f "$DNSTT_KEYS_DIR/server.key" ]]; then
-        echo -e "${C_GREEN}✅ Using existing DNSTT keys (maintaining constant public key)${C_RESET}"
-        # Ensure public key file has the constant value
-        if [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
-            echo -e "${C_YELLOW}⚠️ Warning: server.key exists but server.pub is missing. Setting constant public key...${C_RESET}"
-            echo "$CONSTANT_PUBLIC_KEY" > "$DNSTT_KEYS_DIR/server.pub"
-        else
-            # Verify public key matches constant value
-            local current_pubkey
-            current_pubkey=$(cat "$DNSTT_KEYS_DIR/server.pub" 2>/dev/null | tr -d '\n\r')
-            if [[ "$current_pubkey" != "$CONSTANT_PUBLIC_KEY" ]]; then
-                echo -e "${C_YELLOW}⚠️ Warning: Public key does not match constant value. Updating to constant key...${C_RESET}"
-                echo "$CONSTANT_PUBLIC_KEY" > "$DNSTT_KEYS_DIR/server.pub"
-            fi
-        fi
-    else
-        # Generate new private key only if server.key does NOT exist
-        echo -e "${C_BLUE}🔐 Generating new private key (public key will remain constant)...${C_RESET}"
-        if ! "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub" 2>/dev/null; then
-            echo -e "${C_RED}❌ Failed to generate DNSTT private key.${C_RESET}"
-            return 1
-        fi
-        if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]]; then
-            echo -e "${C_RED}❌ Private key file was not created successfully.${C_RESET}"
-            return 1
-        fi
-        # Overwrite public key with constant value
-        echo "$CONSTANT_PUBLIC_KEY" > "$DNSTT_KEYS_DIR/server.pub"
-        echo -e "${C_GREEN}✅ Private key generated and constant public key set${C_RESET}"
-        echo -e "${C_YELLOW}⚠️ IMPORTANT: Public key is set to constant value and will not change${C_RESET}"
-    fi
-    
-    local PUBLIC_KEY
-    PUBLIC_KEY="$CONSTANT_PUBLIC_KEY"
-    # Ensure public key file has the constant value
-    echo "$CONSTANT_PUBLIC_KEY" > "$DNSTT_KEYS_DIR/server.pub"
-    
-    # Check for Python3 and install if needed
-    if ! command -v python3 &> /dev/null; then
-        echo -e "${C_YELLOW}⚠️ Python3 not found. Installing Python3...${C_RESET}"
-        if ! apt-get update > /dev/null 2>&1; then
-            echo -e "${C_RED}❌ Failed to update package list.${C_RESET}"
-            return 1
-        fi
-        if ! apt-get install -y python3 > /dev/null 2>&1; then
-            echo -e "${C_RED}❌ Failed to install Python3. EDNS proxy requires Python3.${C_RESET}"
-            echo -e "${C_YELLOW}ℹ️ Please install Python3 manually: apt-get install python3${C_RESET}"
-            return 1
-        fi
-        echo -e "${C_GREEN}✅ Python3 installed successfully.${C_RESET}"
-    fi
-    
-    echo -e "\n${C_BLUE}📝 Creating EDNS proxy script...${C_RESET}"
-    cat > "$DNSTT_EDNS_PROXY" <<'EDNSPROXY'
-#!/usr/bin/env python3
-"""
-DNSTT EDNS proxy (smart parser)
-- Listens on UDP :53 (public)
-- Forwards to 127.0.0.1:5300 (dnstt-server) with bigger EDNS size
-- Outside sees 512, inside server sees 1800
-"""
-
-import socket
-import threading
-import struct
-import sys
-import traceback
-
-# Public listen
-LISTEN_HOST = "0.0.0.0"
-LISTEN_PORT = 53
-
-# Internal dnstt-server address
-UPSTREAM_HOST = "127.0.0.1"
-UPSTREAM_PORT = 5300
-
-# External DNS servers for regular DNS resolution
-EXTERNAL_DNS_SERVERS = ["8.8.8.8", "1.1.1.1", "8.8.4.4"]
-EXTERNAL_DNS_PORT = 53
-
-# DNSTT tunnel domain (must match the domain in service file)
-TUNNEL_DOMAIN = "idd.voltrontechtx.shop"
-
-# EDNS sizes
-EXTERNAL_EDNS_SIZE = 512    # what we show to resolvers
-INTERNAL_EDNS_SIZE = 1800   # what we tell dnstt-server internally
-
-
-def patch_edns_udp_size(data: bytes, new_size: int) -> bytes:
-    """
-    Parse DNS message properly and patch EDNS (OPT RR) UDP payload size.
-    If no EDNS / cannot parse properly → return data as is.
-    """
-    if len(data) < 12:
-        return data
-
-    try:
-        # Header: ID(2), FLAGS(2), QDCOUNT(2), ANCOUNT(2), NSCOUNT(2), ARCOUNT(2)
-        qdcount, ancount, nscount, arcount = struct.unpack("!HHHH", data[4:12])
-    except struct.error:
-        return data
-
-    offset = 12
-
-    def skip_name(buf, off):
-        """Skip DNS name (supporting compression)."""
-        while True:
-            if off >= len(buf):
-                return len(buf)
-            l = buf[off]
-            off += 1
-            if l == 0:
-                break
-            if l & 0xC0 == 0xC0:
-                # compression pointer, one more byte
-                if off >= len(buf):
-                    return len(buf)
-                off += 1
-                break
-            off += l
-        return off
-
-    # Skip Questions
-    for _ in range(qdcount):
-        offset = skip_name(data, offset)
-        if offset + 4 > len(data):
-            return data
-        offset += 4  # QTYPE + QCLASS
-
-    def skip_rrs(count, buf, off):
-        """Skip Resource Records (Answer + Authority)."""
-        for _ in range(count):
-            off = skip_name(buf, off)
-            if off + 10 > len(buf):
-                return len(buf)
-            # TYPE(2) + CLASS(2) + TTL(4) + RDLEN(2)
-            rtype, rclass, ttl, rdlen = struct.unpack("!HHIH", buf[off:off+10])
-            off += 10
-            if off + rdlen > len(buf):
-                return len(buf)
-            off += rdlen
-        return off
-
-    # Skip Answer + Authority
-    offset = skip_rrs(ancount, data, offset)
-    offset = skip_rrs(nscount, data, offset)
-
-    # Additional section → EDNS OPT RR is here
-    new_data = bytearray(data)
-    for _ in range(arcount):
-        rr_name_start = offset
-        offset = skip_name(data, offset)
-        if offset + 10 > len(data):
-            return data
-        rtype = struct.unpack("!H", data[offset:offset+2])[0]
-
-        if rtype == 41:  # OPT RR (EDNS)
-            # UDP payload size is bytes 2 following TYPE
-            size_bytes = struct.pack("!H", new_size)
-            new_data[offset+2:offset+4] = size_bytes
-            return bytes(new_data)
-
-        # Skip CLASS(2) + TTL(4) + RDLEN(2) + RDATA
-        _, _, rdlen = struct.unpack("!H I H", data[offset+2:offset+10])
-        offset += 10 + rdlen
-
-    return data
-
-
-def extract_dns_name(data: bytes, offset: int) -> tuple:
-    """Extract DNS name from DNS message starting at offset. Returns (name, new_offset)."""
-    if offset >= len(data):
-        return ("", len(data))
-    
-    name_parts = []
-    current_offset = offset
-    jumped = False
-    max_jumps = 10
-    jump_count = 0
-    
-    while current_offset < len(data) and jump_count < max_jumps:
-        length = data[current_offset]
-        
-        # Check for compression pointer
-        if length & 0xC0 == 0xC0:
-            if current_offset + 1 >= len(data):
-                break
-            if not jumped:
-                offset = current_offset + 2
-            jump_offset = ((length & 0x3F) << 8) | data[current_offset + 1]
-            if jump_offset >= len(data):
-                break
-            current_offset = jump_offset
-            jumped = True
-            jump_count += 1
-            continue
-        
-        # End of name
-        if length == 0:
-            if not jumped:
-                offset = current_offset + 1
-            break
-        
-        # Label length
-        if length > 63:
-            break
-        
-        # Extract label
-        if current_offset + 1 + length > len(data):
-            break
-        label = data[current_offset + 1:current_offset + 1 + length].decode('utf-8', errors='ignore')
-        name_parts.append(label)
-        current_offset += 1 + length
-    
-    name = ".".join(name_parts)
-    if not jumped:
-        offset = current_offset + 1
-    return (name.lower(), offset)
-
-
-def is_dnstt_query(data: bytes) -> bool:
-    """Check if DNS query is for DNSTT tunnel domain."""
-    if len(data) < 12:
-        return False
-    
-    try:
-        # Extract question section
-        qdcount = struct.unpack("!H", data[4:6])[0]
-        if qdcount == 0:
-            return False
-        
-        # Extract domain name from question
-        name, _ = extract_dns_name(data, 12)
-        if not name:
-            return False
-        
-        # Check if query is for tunnel domain or subdomain
-        return name == TUNNEL_DOMAIN or name.endswith("." + TUNNEL_DOMAIN)
-    except:
-        return False
-
-
-def forward_to_external_dns(data: bytes) -> bytes:
-    """Forward DNS query to external DNS servers."""
-    for dns_server in EXTERNAL_DNS_SERVERS:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(5.0)
-            sock.sendto(data, (dns_server, EXTERNAL_DNS_PORT))
-            resp, _ = sock.recvfrom(4096)
-            sock.close()
-            if resp:
-                return resp
-        except:
-            continue
-    return b""
-
-
-def handle_request(server_sock: socket.socket, data: bytes, client_addr):
-    """
-    - Check if query is for DNSTT tunnel domain
-    - If yes: forward to dnstt-server (port 5300) with EDNS size patching
-    - If no: forward to external DNS servers (8.8.8.8, etc.) for regular DNS resolution
-    - Return response to client
-    """
-    upstream_sock = None
-    try:
-        # Check if this is a DNSTT tunnel query
-        is_tunnel_query = is_dnstt_query(data)
-        
-        if is_tunnel_query:
-            # Forward to DNSTT server with EDNS size patching
-            upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            upstream_sock.settimeout(30.0)  # Increased timeout for better reliability
-            
-            upstream_data = patch_edns_udp_size(data, INTERNAL_EDNS_SIZE)
-            upstream_sock.sendto(upstream_data, (UPSTREAM_HOST, UPSTREAM_PORT))
-
-            resp, _ = upstream_sock.recvfrom(8192)  # Increased buffer size for larger responses
-            if resp:
-                resp_patched = patch_edns_udp_size(resp, EXTERNAL_EDNS_SIZE)
-                server_sock.sendto(resp_patched, client_addr)
-        else:
-            # Forward regular DNS query to external DNS servers
-            resp = forward_to_external_dns(data)
-            if resp:
-                server_sock.sendto(resp, client_addr)
-            else:
-                # If all external DNS servers fail, try DNSTT as fallback
-                try:
-                    upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    upstream_sock.settimeout(10.0)  # Increased timeout for fallback
-                    upstream_sock.sendto(data, (UPSTREAM_HOST, UPSTREAM_PORT))
-                    resp, _ = upstream_sock.recvfrom(8192)  # Increased buffer size
-                    if resp:
-                        server_sock.sendto(resp, client_addr)
-                except:
-                    pass
-    except socket.timeout:
-        # Timeout - upstream may be slow, client will resend
-        pass
-    except ConnectionRefusedError:
-        # Upstream not ready - try again on next request
-        pass
-    except OSError as e:
-        # Network error - log but don't crash
-        if e.errno != 101:  # Network unreachable is ok to ignore
-            print(f"[DNSTT EDNS proxy] Warning: OSError in handle_request: {e}", file=sys.stderr)
-    except Exception as e:
-        # Unexpected error - log but don't crash
-        print(f"[DNSTT EDNS proxy] Warning: Unexpected error in handle_request: {e}", file=sys.stderr)
-    finally:
-        if upstream_sock:
-            try:
-                upstream_sock.close()
-            except:
-                pass
-
-
-def main():
-    server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
-    try:
-        server_sock.bind((LISTEN_HOST, LISTEN_PORT))
-        print(f"[DNSTT EDNS proxy] Successfully bound to {LISTEN_HOST}:{LISTEN_PORT}")
-        print(f"[DNSTT EDNS proxy] DNSTT upstream: {UPSTREAM_HOST}:{UPSTREAM_PORT}")
-        print(f"[DNSTT EDNS proxy] External DNS servers: {', '.join(EXTERNAL_DNS_SERVERS)}")
-        print(f"[DNSTT EDNS proxy] Tunnel domain: {TUNNEL_DOMAIN}")
-        print(f"[DNSTT EDNS proxy] External EDNS={EXTERNAL_EDNS_SIZE}, Internal EDNS={INTERNAL_EDNS_SIZE}")
-    except PermissionError:
-        print(f"[DNSTT EDNS proxy] ERROR: Permission denied binding to port {LISTEN_PORT}")
-        print(f"[DNSTT EDNS proxy] ERROR: Service needs CAP_NET_BIND_SERVICE capability or root privileges")
-        sys.exit(1)
-    except OSError as e:
-        print(f"[DNSTT EDNS proxy] ERROR: Failed to bind to {LISTEN_HOST}:{LISTEN_PORT}: {e}")
-        print(f"[DNSTT EDNS proxy] ERROR: Port {LISTEN_PORT} may be in use or already bound")
-        sys.exit(1)
-    except Exception as e:
-        print(f"[DNSTT EDNS proxy] ERROR: Unexpected error: {e}")
-        sys.exit(1)
-
-    while True:
-        try:
-            data, client_addr = server_sock.recvfrom(4096)
-            t = threading.Thread(
-                target=handle_request,
-                args=(server_sock, data, client_addr),
-                daemon=True,
-            )
-            t.start()
-        except KeyboardInterrupt:
-            print(f"\n[DNSTT EDNS proxy] Shutting down...")
-            break
-        except Exception as e:
-            print(f"[DNSTT EDNS proxy] ERROR in main loop: {e}")
-            continue
-
-
-if __name__ == "__main__":
-    main()
-EDNSPROXY
-    
-    # Verify Python script was created correctly
-    if [ ! -f "$DNSTT_EDNS_PROXY" ]; then
-        echo -e "${C_RED}❌ Failed to create EDNS proxy script.${C_RESET}"
+        echo -e "${C_RED}❌ Unsupported architecture: $arch${C_RESET}"
+        echo -e "${C_YELLOW}Supported architectures: x86_64, aarch64/arm64${C_RESET}"
         return 1
     fi
     
-    # Set executable permissions
-    chmod +x "$DNSTT_EDNS_PROXY"
-    
-    # Verify Python script syntax
-    if ! python3 -m py_compile "$DNSTT_EDNS_PROXY" 2>/dev/null; then
-        echo -e "${C_YELLOW}⚠️ Warning: Python script syntax check failed. Proceeding anyway...${C_RESET}"
-    else
-        echo -e "${C_GREEN}✅ EDNS proxy script created and validated successfully.${C_RESET}"
-    fi
-    
-    echo -e "\n${C_BLUE}📝 Creating DNSTT systemd service (port 5300)...${C_RESET}"
-    # Determine which binary path to use (prefer /root/dnstt/dnstt-server, fallback to /usr/local/bin/dnstt-server)
-    local dnstt_exec_path="/root/dnstt/dnstt-server"
-    if [[ ! -f "$dnstt_exec_path" ]]; then
-        dnstt_exec_path="/usr/local/bin/dnstt-server"
-        if [[ ! -f "$dnstt_exec_path" ]]; then
-            echo -e "${C_RED}❌ DNSTT binary not found at either location.${C_RESET}"
+    echo -e "${C_BLUE}ℹ️ Downloading from: $binary_url${C_RESET}"
+    if ! curl -sL "$binary_url" -o "$SLOWDNS_BINARY"; then
+        echo -e "${C_YELLOW}⚠️ Primary download failed, trying alternative source...${C_RESET}"
+        # Alternative source
+        if [[ "$arch" == "x86_64" ]]; then
+            binary_url="https://dnstt.network/dnstt-server-linux-amd64"
+        elif [[ "$arch" == "aarch64" || "$arch" == "arm64" ]]; then
+            binary_url="https://dnstt.network/dnstt-server-linux-arm64"
+        fi
+        if ! curl -sL "$binary_url" -o "$SLOWDNS_BINARY"; then
+            echo -e "${C_RED}❌ Failed to download SlowDNS binary from all sources${C_RESET}"
+            echo -e "${C_YELLOW}Please check your internet connection and try again.${C_RESET}"
             return 1
         fi
-        echo -e "${C_YELLOW}ℹ️ Using DNSTT binary at: $dnstt_exec_path${C_RESET}"
-    else
-        echo -e "${C_GREEN}ℹ️ Using DNSTT binary at: $dnstt_exec_path${C_RESET}"
     fi
     
-    # Verify key file exists
-    if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]]; then
-        echo -e "${C_RED}❌ DNSTT private key not found at: $DNSTT_KEYS_DIR/server.key${C_RESET}"
+    if [[ ! -f "$SLOWDNS_BINARY" ]] || [[ ! -s "$SLOWDNS_BINARY" ]]; then
+        echo -e "${C_RED}❌ Downloaded file is empty or missing.${C_RESET}"
+        return 1
+    fi
+    chmod +x "$SLOWDNS_BINARY"
+    
+    # Generate keys
+    echo -e "\n${C_BLUE}🔐 Generating cryptographic keys...${C_RESET}"
+    if ! "$SLOWDNS_BINARY" -gen-key -privkey-file "$SLOWDNS_KEYS_DIR/server.key" -pubkey-file "$SLOWDNS_KEYS_DIR/server.pub" 2>/dev/null; then
+        echo -e "${C_RED}❌ Failed to generate keys.${C_RESET}"
         return 1
     fi
     
-    # Use fixed configuration: MTU 512, domain idd.voltrontechtx.shop, forward to 127.0.0.1:22
-    cat > "$DNSTT_SERVICE_FILE" <<-EOF
+    local PUBLIC_KEY=$(cat "$SLOWDNS_KEYS_DIR/server.pub" 2>/dev/null | tr -d '\n\r')
+    if [[ -z "$PUBLIC_KEY" ]]; then
+        echo -e "${C_RED}❌ Failed to read public key.${C_RESET}"
+        return 1
+    fi
+    
+    echo -e "${C_GREEN}✅ Keys generated successfully${C_RESET}"
+    
+    # Create systemd service
+    echo -e "\n${C_BLUE}📝 Creating systemd service...${C_RESET}"
+    cat > "$SLOWDNS_SERVICE_FILE" <<-EOF
 [Unit]
-Description=DNSTT Server (DNS Tunnel)
+Description=SlowDNS Server (Advanced DNS Tunneling)
 After=network.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$dnstt_exec_path -udp :5300 -mtu 512 -privkey-file /root/dnstt/server.key idd.voltrontechtx.shop 127.0.0.1:22
+ExecStart=$SLOWDNS_BINARY -udp :$SLOWDNS_INTERNAL_PORT -mtu $MTU_VALUE -privkey-file $SLOWDNS_KEYS_DIR/server.key $TUNNEL_DOMAIN $FORWARD_TARGET
 Restart=always
 RestartSec=3
 RestartPreventExitStatus=0
@@ -2705,24 +1825,74 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
     
-    echo -e "\n${C_BLUE}📝 Creating EDNS proxy systemd service (port 53)...${C_RESET}"
-    cat > "$DNSTT_EDNS_SERVICE" <<-EOF
+    # Create DNS proxy script for port 53
+    echo -e "\n${C_BLUE}📝 Creating DNS proxy script...${C_RESET}"
+    cat > "$SLOWDNS_DIR/dns-proxy.py" <<'PROXYSCRIPT'
+#!/usr/bin/env python3
+import socket
+import threading
+import sys
+
+LISTEN_HOST = "0.0.0.0"
+LISTEN_PORT = 53
+UPSTREAM_HOST = "127.0.0.1"
+UPSTREAM_PORT = 5300
+
+def handle_request(server_sock, data, client_addr):
+    try:
+        upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        upstream_sock.settimeout(10.0)
+        upstream_sock.sendto(data, (UPSTREAM_HOST, UPSTREAM_PORT))
+        resp, _ = upstream_sock.recvfrom(4096)
+        if resp:
+            server_sock.sendto(resp, client_addr)
+        upstream_sock.close()
+    except:
+        pass
+
+def main():
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server_sock.bind((LISTEN_HOST, LISTEN_PORT))
+        print(f"[SlowDNS Proxy] Listening on {LISTEN_HOST}:{LISTEN_PORT}")
+    except PermissionError:
+        print(f"[SlowDNS Proxy] ERROR: Permission denied on port {LISTEN_PORT}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"[SlowDNS Proxy] ERROR: {e}")
+        sys.exit(1)
+    
+    while True:
+        try:
+            data, client_addr = server_sock.recvfrom(4096)
+            t = threading.Thread(target=handle_request, args=(server_sock, data, client_addr), daemon=True)
+            t.start()
+        except KeyboardInterrupt:
+            break
+        except:
+            continue
+
+if __name__ == "__main__":
+    main()
+PROXYSCRIPT
+    
+    chmod +x "$SLOWDNS_DIR/dns-proxy.py"
+    
+    # Create DNS proxy service
+    cat > "/etc/systemd/system/slowdns-proxy.service" <<-EOF
 [Unit]
-Description=DNSTT EDNS Proxy (port 53 to 5300)
-After=network-online.target dnstt.service
+Description=SlowDNS DNS Proxy (port 53 to 5300)
+After=network-online.target slowdns.service
 Wants=network-online.target
-Requires=dnstt.service
+Requires=slowdns.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 "$DNSTT_EDNS_PROXY"
+ExecStart=/usr/bin/python3 $SLOWDNS_DIR/dns-proxy.py
 Restart=always
 RestartSec=3
-RestartPreventExitStatus=0
-StandardOutput=journal
-StandardError=journal
 User=root
-# Ensure port 53 binding works properly (low port binding for DNS)
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
 NoNewPrivileges=false
@@ -2730,433 +1900,114 @@ NoNewPrivileges=false
 [Install]
 WantedBy=multi-user.target
 EOF
-    echo -e "\n${C_BLUE}💾 Saving configuration and starting service...${C_RESET}"
-    # Save the public key to config file (this will remain constant for this installation)
-    cat > "$DNSTT_CONFIG_FILE" <<-EOF
-NS_SUBDOMAIN="$NS_SUBDOMAIN"
-TUNNEL_SUBDOMAIN="$TUNNEL_SUBDOMAIN"
+    
+    # Save configuration
+    cat > "$SLOWDNS_CONFIG_FILE" <<-EOF
 NS_DOMAIN="$NS_DOMAIN"
 TUNNEL_DOMAIN="$TUNNEL_DOMAIN"
 PUBLIC_KEY="$PUBLIC_KEY"
-FORWARD_DESC="$forward_desc"
-DNSTT_RECORDS_MANAGED="$DNSTT_RECORDS_MANAGED"
-HAS_IPV6="$HAS_IPV6"
-MTU_VALUE="$mtu_value"
-KEY_FILE_PATH="$DNSTT_KEYS_DIR"
+FORWARD_TARGET="$FORWARD_TARGET"
+FORWARD_DESC="$FORWARD_DESC"
+MTU_VALUE="$MTU_VALUE"
+KEY_FILE_PATH="$SLOWDNS_KEYS_DIR"
 EOF
-    # Reload systemd daemon
-    if ! systemctl daemon-reload 2>/dev/null; then
-        echo -e "${C_YELLOW}⚠️ Warning: systemd daemon-reload had issues, but continuing...${C_RESET}"
-    else
-        echo -e "${C_GREEN}✅ Systemd daemon reloaded successfully${C_RESET}"
-    fi
-    sleep 1
     
-    # Enable and start DNSTT service with retry logic
-    local enable_attempts=0
-    local start_attempts=0
-    local max_attempts=3
-    local service_enabled=false
-    local service_started=false
+    # Enable and start services
+    echo -e "\n${C_BLUE}🚀 Starting SlowDNS services...${C_RESET}"
+    systemctl daemon-reload
+    systemctl enable slowdns.service
+    systemctl start slowdns.service
+    sleep 2
     
-    # Enable service
-    while [[ $enable_attempts -lt $max_attempts ]]; do
-        enable_attempts=$((enable_attempts + 1))
-        if systemctl enable dnstt.service 2>/dev/null; then
-            service_enabled=true
-            echo -e "${C_GREEN}✅ DNSTT service enabled successfully${C_RESET}"
-            break
-        else
-            if [[ $enable_attempts -lt $max_attempts ]]; then
-                echo -e "${C_YELLOW}⚠️ Enable attempt $enable_attempts failed, retrying...${C_RESET}"
-                systemctl daemon-reload 2>/dev/null
-                sleep 1
-            fi
-        fi
-    done
-    
-    if [[ "$service_enabled" != "true" ]]; then
-        echo -e "${C_YELLOW}⚠️ Warning: Failed to enable DNSTT service after $max_attempts attempts, but continuing...${C_RESET}"
-    fi
-    
-    # Start service with diagnostics and auto-fix
-    while [[ $start_attempts -lt $max_attempts ]]; do
-        start_attempts=$((start_attempts + 1))
+    if systemctl is-active --quiet slowdns.service 2>/dev/null; then
+        echo -e "${C_GREEN}✅ SlowDNS server started${C_RESET}"
         
-        if systemctl start dnstt.service 2>/dev/null; then
-            sleep 3
-            if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                service_started=true
-                break
-            else
-                echo -e "${C_YELLOW}⚠️ Service started but is not active. Diagnosing...${C_RESET}"
-            fi
-        fi
+        systemctl enable slowdns-proxy.service
+        systemctl start slowdns-proxy.service
+        sleep 2
         
-        if [[ $start_attempts -lt $max_attempts ]]; then
-            echo -e "${C_YELLOW}⚠️ Start attempt $start_attempts failed. Diagnosing and fixing...${C_RESET}"
-            
-            # Diagnose issues
-            local error_log=$(journalctl -u dnstt.service -n 20 --no-pager 2>/dev/null)
-            
-            # Check for binary permission issues
-            if [[ -f "$DNSTT_BINARY" ]] && [[ ! -x "$DNSTT_BINARY" ]]; then
-                echo -e "${C_BLUE}🔧 Fixing: Binary not executable. Adding execute permissions...${C_RESET}"
-                chmod +x "$DNSTT_BINARY" 2>/dev/null
-            fi
-            
-            # Check for missing binary
-            if [[ ! -f "$DNSTT_BINARY" ]]; then
-                echo -e "${C_RED}❌ DNSTT binary not found at: $DNSTT_BINARY${C_RESET}"
-                return 1
-            fi
-            
-            # Check for missing key files
-            if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]] || [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
-                echo -e "${C_RED}❌ DNSTT key files not found. Keys are required.${C_RESET}"
-                return 1
-            fi
-            
-            # Check for port conflicts
-            if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s' && ! ss -lunp 2>/dev/null | grep -qE 'dnstt.*:5300\s'; then
-                local port_conflict=$(ss -lunp 2>/dev/null | grep -E ':(5300|:5300)\s' | head -n1)
-                echo -e "${C_YELLOW}⚠️ Port 5300 is in use: $port_conflict${C_RESET}"
-                echo -e "${C_BLUE}🔧 Attempting to free port 5300...${C_RESET}"
-                pkill -f "dnstt.*5300" 2>/dev/null
-                sleep 2
-            fi
-            
-            # Reload daemon before retry
-            systemctl daemon-reload 2>/dev/null
-            sleep 2
-        fi
-    done
-    
-    if [[ "$service_started" != "true" ]]; then
-        echo -e "${C_RED}❌ Failed to start DNSTT service after $max_attempts attempts.${C_RESET}"
-        echo -e "${C_YELLOW}📋 Showing service logs:${C_RESET}"
-        journalctl -u dnstt.service -n 30 --no-pager 2>/dev/null || true
-        return 1
-    fi
-    
-    sleep 3
-    
-    # Validate DNSTT service is running and port 5300 is listening
-    local dnstt_started=false
-    if systemctl is-active --quiet dnstt.service; then
-        if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
-            echo -e "${C_GREEN}✅ DNSTT server (port 5300) started successfully and is listening.${C_RESET}"
-            dnstt_started=true
-        else
-            echo -e "${C_YELLOW}⚠️ DNSTT service is active but port 5300 is not listening. Checking logs...${C_RESET}"
-            journalctl -u dnstt.service -n 20 --no-pager
-            sleep 2
-            # Retry check
-            if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
-                echo -e "${C_GREEN}✅ Port 5300 is now listening.${C_RESET}"
-                dnstt_started=true
-            fi
+        if systemctl is-active --quiet slowdns-proxy.service 2>/dev/null; then
+            echo -e "${C_GREEN}✅ SlowDNS proxy started${C_RESET}"
         fi
     else
-        echo -e "${C_RED}❌ DNSTT service is not active.${C_RESET}"
-        journalctl -u dnstt.service -n 20 --no-pager
-        return 1
+        echo -e "${C_YELLOW}⚠️ SlowDNS server may need attention${C_RESET}"
+        journalctl -u slowdns.service -n 15 --no-pager
     fi
     
-    # Validate DNSTT service is running and port 5300 is listening
-    local dnstt_started=false
-    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-        if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
-            echo -e "${C_GREEN}✅ DNSTT server (port 5300) started successfully and is listening.${C_RESET}"
-            dnstt_started=true
-        else
-            echo -e "${C_YELLOW}⚠️ DNSTT service is active but port 5300 is not listening. Waiting and retrying...${C_RESET}"
-            sleep 3
-            if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
-                echo -e "${C_GREEN}✅ Port 5300 is now listening.${C_RESET}"
-                dnstt_started=true
-            else
-                echo -e "${C_YELLOW}⚠️ Port 5300 still not listening. Check logs: journalctl -u dnstt.service${C_RESET}"
-                journalctl -u dnstt.service -n 20 --no-pager 2>/dev/null || true
-            fi
-        fi
-    else
-        echo -e "${C_RED}❌ DNSTT service is not active after start attempts.${C_RESET}"
-        journalctl -u dnstt.service -n 30 --no-pager 2>/dev/null || true
-        return 1
-    fi
+    # Configure DNS forwarding
+    enable_dns_forwarding
     
-    if [[ "$dnstt_started" == "true" ]]; then
-        # Start EDNS proxy service with retry logic
-        echo -e "\n${C_BLUE}🚀 Starting EDNS proxy service...${C_RESET}"
-        
-        local edns_enable_attempts=0
-        local edns_start_attempts=0
-        local edns_service_enabled=false
-        local edns_service_started=false
-        
-        # Enable service
-        while [[ $edns_enable_attempts -lt $max_attempts ]]; do
-            edns_enable_attempts=$((edns_enable_attempts + 1))
-            if systemctl enable dnstt-edns-proxy.service 2>/dev/null; then
-                edns_service_enabled=true
-                echo -e "${C_GREEN}✅ EDNS proxy service enabled successfully${C_RESET}"
-                break
-            else
-                if [[ $edns_enable_attempts -lt $max_attempts ]]; then
-                    echo -e "${C_YELLOW}⚠️ Enable attempt $edns_enable_attempts failed, retrying...${C_RESET}"
-                    systemctl daemon-reload 2>/dev/null
-                    sleep 1
-                fi
-            fi
-        done
-        
-        if [[ "$edns_service_enabled" != "true" ]]; then
-            echo -e "${C_YELLOW}⚠️ Warning: Failed to enable EDNS proxy service after $max_attempts attempts, but continuing...${C_RESET}"
-        fi
-        
-        # Ensure port 53 is free (kill systemd-resolved and other conflicts)
-        echo -e "${C_BLUE}🔍 Checking port 53 availability...${C_RESET}"
-        if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
-            local port53_process=$(ss -lunp 2>/dev/null | grep -E ':(53|:53)\s' | head -n1)
-            if ! echo "$port53_process" | grep -qE 'python3.*:53\s'; then
-                echo -e "${C_YELLOW}⚠️ Port 53 is in use: $port53_process${C_RESET}"
-                echo -e "${C_BLUE}🔧 Attempting to free port 53...${C_RESET}"
-                
-                # Stop systemd-resolved if running
-                if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-                    systemctl stop systemd-resolved 2>/dev/null
-                    systemctl disable systemd-resolved 2>/dev/null
-                    systemctl mask systemd-resolved 2>/dev/null
-                    echo -e "${C_GREEN}✅ Stopped systemd-resolved${C_RESET}"
-                fi
-                
-                # Kill any remaining processes
-                pkill -9 systemd-resolved 2>/dev/null
-                pkill -9 dnstt-edns-proxy 2>/dev/null
-                sleep 3
-                
-                # Verify port is free
-                if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
-                    echo -e "${C_YELLOW}⚠️ Port 53 still in use after cleanup attempt${C_RESET}"
-                else
-                    echo -e "${C_GREEN}✅ Port 53 is now free${C_RESET}"
-                fi
-            fi
-        fi
-        
-        # Start service with diagnostics and auto-fix
-        while [[ $edns_start_attempts -lt $max_attempts ]]; do
-            edns_start_attempts=$((edns_start_attempts + 1))
-            
-            if systemctl start dnstt-edns-proxy.service 2>/dev/null; then
-                sleep 3
-                if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                    edns_service_started=true
-                    break
-                else
-                    echo -e "${C_YELLOW}⚠️ Service started but is not active. Diagnosing...${C_RESET}"
-                fi
-            fi
-            
-            if [[ $edns_start_attempts -lt $max_attempts ]]; then
-                echo -e "${C_YELLOW}⚠️ Start attempt $edns_start_attempts failed. Diagnosing and fixing...${C_RESET}"
-                
-                # Check for script file issues
-                if [ ! -f "$DNSTT_EDNS_PROXY" ]; then
-                    echo -e "${C_RED}❌ EDNS proxy script not found at: $DNSTT_EDNS_PROXY${C_RESET}"
-                    return 1
-                elif [ ! -x "$DNSTT_EDNS_PROXY" ]; then
-                    echo -e "${C_BLUE}🔧 Fixing: Script not executable. Adding execute permissions...${C_RESET}"
-                    chmod +x "$DNSTT_EDNS_PROXY" 2>/dev/null
-                fi
-                
-                # Check for Python3
-                if ! command -v python3 &> /dev/null; then
-                    echo -e "${C_RED}❌ Python3 is not installed. Installing...${C_RESET}"
-                    apt-get update && apt-get install -y python3 2>/dev/null || yum install -y python3 2>/dev/null || echo -e "${C_RED}Failed to install python3${C_RESET}"
-                fi
-                
-                # Check script syntax
-                if ! python3 -m py_compile "$DNSTT_EDNS_PROXY" 2>/dev/null; then
-                    echo -e "${C_YELLOW}⚠️ EDNS proxy script has syntax errors${C_RESET}"
-                fi
-                
-                # Reload daemon before retry
-                systemctl daemon-reload 2>/dev/null
-                sleep 2
-            fi
-        done
-        
-        if [[ "$edns_service_started" != "true" ]]; then
-            echo -e "${C_YELLOW}⚠️ Failed to start EDNS proxy service after $max_attempts attempts.${C_RESET}"
-            echo -e "${C_YELLOW}📋 Showing service logs:${C_RESET}"
-            journalctl -u dnstt-edns-proxy.service -n 30 --no-pager 2>/dev/null || true
-        fi
-        
-        # Validate EDNS proxy is running and port 53 is listening
-        local edns_started=false
-        if [[ "$edns_service_started" == "true" ]]; then
-            sleep 2
-            if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
-                    echo -e "${C_GREEN}✅ EDNS proxy (port 53) started successfully and is listening.${C_RESET}"
-                    edns_started=true
-                else
-                    echo -e "${C_YELLOW}⚠️ EDNS proxy service is active but port 53 may not be listening properly. Waiting...${C_RESET}"
-                    sleep 3
-                    # Retry check
-                    if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
-                        echo -e "${C_GREEN}✅ Port 53 is now listening.${C_RESET}"
-                        edns_started=true
-                    else
-                        echo -e "${C_YELLOW}⚠️ Port 53 still not listening. Check logs: journalctl -u dnstt-edns-proxy.service${C_RESET}"
-                        journalctl -u dnstt-edns-proxy.service -n 20 --no-pager 2>/dev/null || true
-                    fi
-                fi
-            else
-                echo -e "${C_YELLOW}⚠️ EDNS proxy service is not active after start attempts.${C_RESET}"
-                journalctl -u dnstt-edns-proxy.service -n 30 --no-pager 2>/dev/null || true
-            fi
-        fi
-        
-        if [[ "$dnstt_started" == "true" ]] && [[ "$edns_started" == "true" ]]; then
-            echo -e "\n${C_GREEN}✅ SUCCESS: DNSTT with EDNS proxy has been installed and started!${C_RESET}"
-            echo -e "${C_CYAN}ℹ️ DNSTT server runs on port 5300 (internal)${C_RESET}"
-            echo -e "${C_CYAN}ℹ️ EDNS proxy listens on port 53 (public) and forwards to port 5300${C_RESET}"
-            echo -e "${C_CYAN}ℹ️ External EDNS size: 512, Internal EDNS size: 1800 (high speed)${C_RESET}"
-            echo -e "\n${C_YELLOW}🔑 IMPORTANT: Your public key is CONSTANT and will remain the same for VPN connections${C_RESET}"
-            echo -e "${C_YELLOW}   The key is stored at: ${C_WHITE}$DNSTT_KEYS_DIR/server.pub${C_RESET}"
-            echo -e "${C_YELLOW}   This key will be reused on reinstallations unless manually deleted${C_RESET}"
-            
-            # Auto-configure DNS forwarding and SSH when VPN (DNSTT) is connected
-            echo -e "\n${C_BLUE}⚙️ Auto-configuring VPN services (DNS forwarding & SSH)...${C_RESET}"
-            setup_vpn_auto_config
-            
-            # Get server IP address for DNS configuration
-            local server_ip=""
-            if command -v hostname &> /dev/null; then
-                server_ip=$(hostname -I | awk '{print $1}' 2>/dev/null || hostname -i 2>/dev/null | awk '{print $1}')
-            fi
-            if [[ -z "$server_ip" ]] && command -v ip &> /dev/null; then
-                server_ip=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+' | head -n1)
-            fi
-            if [[ -z "$server_ip" ]] && command -v ifconfig &> /dev/null; then
-                server_ip=$(ifconfig 2>/dev/null | grep -oP 'inet \K[0-9.]+' | grep -v '127.0.0.1' | head -n1)
-            fi
-            
-            echo -e "\n${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            echo -e "${C_RED}  ⚠️ CRITICAL DNS CONFIGURATION FOR CLIENT${C_RESET}"
-            echo -e "${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            if [[ -n "$NS_DOMAIN" ]]; then
-                echo -e "  ${C_RED}❌ WRONG: Do NOT use DNS 8.8.8.8 or any public DNS${C_RESET}"
-                echo -e "  ${C_GREEN}✅ CORRECT: Client must use DNS: ${C_YELLOW}$NS_DOMAIN${C_RESET}"
-                if [[ -n "$server_ip" ]]; then
-                    echo -e "  ${C_GREEN}✅ Or use IP address: ${C_YELLOW}$server_ip${C_RESET} ${C_DIM}(if nameserver domain points to this IP)${C_RESET}"
-                fi
-                echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Ensure $NS_DOMAIN resolves to this server's IP address: ${C_YELLOW}${server_ip:-"<detect-server-ip>"}${C_RESET}"
-                echo -e "  ${C_YELLOW}💡${C_RESET} ${C_WHITE}Configure client DNS to: ${C_YELLOW}$NS_DOMAIN${C_RESET} ${C_WHITE}or ${C_YELLOW}${server_ip:-"<server-ip>"}${C_RESET}"
-            else
-                echo -e "  ${C_RED}❌ WRONG: Do NOT use DNS 8.8.8.8 or any public DNS${C_RESET}"
-                echo -e "  ${C_YELLOW}⚠️${C_RESET} ${C_WHITE}Nameserver domain not configured. Please reconfigure DNSTT with nameserver domain.${C_RESET}"
-            fi
-            echo -e "${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            
-            # Auto-configure DNS forwarding and SSH when VPN (DNSTT) is connected
-            echo -e "\n${C_BLUE}⚙️ Auto-configuring VPN services (DNS forwarding & SSH)...${C_RESET}"
-            setup_vpn_auto_config
-            
-            show_dnstt_details
-        elif [[ "$dnstt_started" == "true" ]]; then
-            echo -e "\n${C_YELLOW}⚠️ DNSTT server is running, but EDNS proxy may need attention.${C_RESET}"
-            echo -e "${C_YELLOW}💡 Check logs: journalctl -u dnstt-edns-proxy.service -f${C_RESET}"
-            show_dnstt_details
-        fi
-    else
-        echo -e "\n${C_RED}❌ ERROR: DNSTT service failed to start properly.${C_RESET}"
-        journalctl -u dnstt.service -n 20 --no-pager
-        return 1
+    # Show success message
+    echo -e "\n${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}  ✅ SLOWDNS INSTALLATION COMPLETE${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "\n${C_BOLD}${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_RED}  ⚠️ CRITICAL: CLIENT DNS CONFIGURATION${C_RESET}"
+    echo -e "${C_BOLD}${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "\n  ${C_BOLD}${C_CYAN}📡 HOW NAMESERVER HOSTNAME IS USED IN SLOWDNS:${C_RESET}"
+    echo -e "     ${C_WHITE}The nameserver hostname (${C_YELLOW}$NS_DOMAIN${C_WHITE}) is what clients configure as their DNS server.${C_RESET}"
+    echo -e "     ${C_WHITE}This hostname must have an A record pointing to your server IP (${C_YELLOW}$vps_ip${C_WHITE})${C_RESET}"
+    echo ""
+    echo -e "     ${C_BOLD}${C_MAGENTA}Complete Flow:${C_RESET}"
+    echo -e "        ${C_WHITE}1.${C_RESET} Client sets DNS to: ${C_YELLOW}$NS_DOMAIN${C_RESET} ${C_DIM}(nameserver hostname)${C_RESET}"
+    echo -e "        ${C_WHITE}2.${C_RESET} DNS resolver looks up A record: ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}$vps_ip${C_RESET}"
+    echo -e "        ${C_WHITE}3.${C_RESET} Client connects to: ${C_YELLOW}$vps_ip:53${C_RESET} ${C_DIM}(your SlowDNS server)${C_RESET}"
+    echo -e "        ${C_WHITE}4.${C_RESET} SlowDNS processes the DNS tunnel traffic"
+    echo ""
+    echo -e "  ${C_RED}❌ DO NOT USE: 8.8.8.8 or any public DNS${C_RESET}"
+    echo -e "  ${C_GREEN}✅ USE INSTEAD: ${C_YELLOW}$NS_DOMAIN${C_RESET} ${C_DIM}(nameserver hostname - recommended)${C_RESET}"
+    if [[ -n "$vps_ip" ]]; then
+        echo -e "  ${C_GREEN}✅ Or use IP directly: ${C_YELLOW}$vps_ip${C_RESET} ${C_DIM}(if A record exists)${C_RESET}"
     fi
+    echo -e "\n  ${C_BOLD}${C_YELLOW}📋 PUBLIC KEY (for client configuration):${C_RESET}"
+    echo -e "  ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+    echo ""
+    echo -e "  ${C_BOLD}${C_MAGENTA}🔍 Verify DNS Records:${C_RESET}"
+    if [[ -n "$vps_ip" ]]; then
+        echo -e "     ${C_WHITE}Run these commands to verify DNS records:${C_RESET}"
+        echo -e "     ${C_YELLOW}dig +short A $NS_DOMAIN${C_RESET} ${C_DIM}(should return: $vps_ip)${C_RESET}"
+        echo -e "     ${C_YELLOW}nslookup $NS_DOMAIN${C_RESET} ${C_DIM}(should resolve to: $vps_ip)${C_RESET}"
+    fi
+    echo -e "${C_BOLD}${C_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    
+    press_enter
 }
 
-uninstall_dnstt() {
-    echo -e "\n${C_BOLD}${C_PURPLE}--- 🗑️ Uninstalling DNSTT ---${C_RESET}"
-    if [ ! -f "$DNSTT_SERVICE_FILE" ]; then
-        echo -e "${C_YELLOW}ℹ️ DNSTT does not appear to be installed, skipping.${C_RESET}"
+uninstall_slowdns() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🗑️ Uninstalling SlowDNS ---${C_RESET}"
+    
+    if [ ! -f "$SLOWDNS_SERVICE_FILE" ] && [ ! -f "$SLOWDNS_BINARY" ]; then
+        echo -e "${C_YELLOW}ℹ️ SlowDNS does not appear to be installed.${C_RESET}"
+        press_enter
         return
     fi
-    local confirm="y"
-    if [[ "$UNINSTALL_MODE" != "silent" ]]; then
-        read -p "👉 Are you sure you want to uninstall DNSTT? (y/n): " confirm
-    fi
-    if [[ "$confirm" != "y" ]]; then
-        echo -e "\n${C_YELLOW}❌ Uninstallation cancelled.${C_RESET}"
+    
+    read -p "👉 Are you sure you want to uninstall SlowDNS? (y/n): " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo -e "${C_YELLOW}Uninstallation cancelled.${C_RESET}"
         return
     fi
-    echo -e "${C_BLUE}🛑 Stopping and disabling DNSTT services...${C_RESET}"
     
-    # Stop EDNS proxy service
-    if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-        systemctl stop dnstt-edns-proxy.service
-        sleep 1
-    fi
-    systemctl disable dnstt-edns-proxy.service >/dev/null 2>&1
+    echo -e "\n${C_BLUE}🛑 Stopping SlowDNS services...${C_RESET}"
+    systemctl stop slowdns.service slowdns-proxy.service 2>/dev/null
+    systemctl disable slowdns.service slowdns-proxy.service 2>/dev/null
     
-    # Stop DNSTT service
-    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-        systemctl stop dnstt.service
-        sleep 1
-    fi
-    systemctl disable dnstt.service >/dev/null 2>&1
+    pkill -9 slowdns-server 2>/dev/null
+    pkill -9 -f "dns-proxy.py" 2>/dev/null
+    sleep 2
     
-    # Kill any remaining processes
-    pkill -9 dnstt-server 2>/dev/null
-    pkill -9 -f "dnstt-edns-proxy.py" 2>/dev/null
-    sleep 1
-    
-    # Verify services are stopped
-    if systemctl is-active --quiet dnstt.service 2>/dev/null || systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-        echo -e "${C_YELLOW}⚠️ Some services may still be running. Force stopping...${C_RESET}"
-        systemctl stop dnstt.service dnstt-edns-proxy.service 2>/dev/null
-        pkill -9 dnstt-server 2>/dev/null
-        pkill -9 -f "dnstt-edns-proxy.py" 2>/dev/null
-        sleep 2
-    fi
-    
-    if [ -f "$DNSTT_CONFIG_FILE" ]; then
-        echo -e "${C_YELLOW}⚠️ DNS records were manually configured. Please delete them from your DNS provider.${C_RESET}"
-    fi
-    
-    echo -e "${C_BLUE}🗑️ Removing service files and binaries...${C_RESET}"
-    rm -f "$DNSTT_SERVICE_FILE"
-    rm -f "$DNSTT_EDNS_SERVICE"
-    rm -f "$DNSTT_BINARY"
-    rm -f "$DNSTT_EDNS_PROXY"
-    rm -rf "$DNSTT_KEYS_DIR"
-    rm -f "$DNSTT_CONFIG_FILE"
+    echo -e "${C_BLUE}🗑️ Removing files...${C_RESET}"
+    rm -f "$SLOWDNS_SERVICE_FILE"
+    rm -f "/etc/systemd/system/slowdns-proxy.service"
+    rm -f "$SLOWDNS_BINARY"
+    rm -rf "$SLOWDNS_DIR"
+    rm -f "$SLOWDNS_CONFIG_FILE"
     
     systemctl daemon-reload
     
-    # Optional: Unmask systemd-resolved if user wants
-    if systemctl is-masked systemd-resolved 2>/dev/null | grep -q masked; then
-        echo -e "${C_YELLOW}ℹ️ systemd-resolved is currently masked.${C_RESET}"
-        read -p "👉 Do you want to unmask and restore systemd-resolved? (y/n): " restore_resolved
-        if [[ "$restore_resolved" == "y" || "$restore_resolved" == "Y" ]]; then
-            systemctl unmask systemd-resolved 2>/dev/null
-            chattr -i /etc/resolv.conf 2>/dev/null
-            rm -f /etc/resolv.conf
-            systemctl enable systemd-resolved 2>/dev/null
-            systemctl start systemd-resolved 2>/dev/null
-            echo -e "${C_GREEN}✅ systemd-resolved has been restored.${C_RESET}"
-        fi
-    fi
-    
-    echo -e "${C_GREEN}✅ DNSTT has been uninstalled successfully.${C_RESET}"
-    
-    echo -e "${C_YELLOW}ℹ️ Making /etc/resolv.conf writable again...${C_RESET}"
-    chattr -i /etc/resolv.conf &>/dev/null
-
-    echo -e "\n${C_GREEN}✅ DNSTT has been successfully uninstalled.${C_RESET}"
+    echo -e "${C_GREEN}✅ SlowDNS has been uninstalled successfully.${C_RESET}"
+    press_enter
 }
 
 install_web_proxy() {
@@ -3788,10 +2639,9 @@ iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
 # Allow SSH (port 22)
 iptables -A INPUT -p tcp --dport 22 -j ACCEPT
 
-# Allow common VPN ports (DNSTT, OpenVPN, WireGuard, etc.)
-# DNSTT
+# Allow common VPN ports (OpenVPN, WireGuard, etc.)
+# DNS port (if needed for custom DNS service)
 iptables -A INPUT -p udp --dport 53 -j ACCEPT
-iptables -A INPUT -p udp --dport 5300 -j ACCEPT
 
 # OpenVPN
 iptables -A INPUT -p udp --dport 1194 -j ACCEPT
@@ -4269,15 +3119,6 @@ detect_vpn_connection() {
         vpn_active=true
     fi
     
-    # Check DNSTT
-    if systemctl is-active --quiet dnstt.service 2>/dev/null && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-        if [[ "$vpn_type" != "NONE" ]]; then
-            vpn_type="${vpn_type}+DNSTT"
-        else
-            vpn_type="DNSTT"
-        fi
-        vpn_active=true
-    fi
     
     # Check other VPN services
     if ip link show | grep -q "tun\|tap"; then
@@ -4306,60 +3147,17 @@ detect_vpn_connection() {
 enable_dns_forwarding() {
     echo -e "${C_BLUE}🔍 Enabling DNS forwarding...${C_RESET}"
     
-    # Check if DNSTT is installed - if so, configure resolv.conf to use localhost
-    if [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ]; then
-        # DNSTT is installed - ensure resolv.conf uses 127.0.0.1
-        # The EDNS proxy on port 53 will handle DNS forwarding
-        if [ ! -L /etc/resolv.conf ] && [ -f /etc/resolv.conf ]; then
-            chattr -i /etc/resolv.conf 2>/dev/null
-            if ! grep -qE "^nameserver 127.0.0.1" /etc/resolv.conf; then
-                echo -e "${C_YELLOW}⚠️ Configuring /etc/resolv.conf for DNSTT DNS forwarding...${C_RESET}"
-                # Backup original nameservers
-                local backup_dns=$(grep "^nameserver" /etc/resolv.conf | grep -v "127.0.0.1" | head -n 2)
-                # Set localhost as primary, keep backup DNS servers
-                sed -i '/^nameserver/d' /etc/resolv.conf
-                echo "nameserver 127.0.0.1" >> /etc/resolv.conf
-                if [[ -n "$backup_dns" ]]; then
-                    echo "$backup_dns" >> /etc/resolv.conf
-                else
-                    echo "nameserver $DNS_PRIMARY" >> /etc/resolv.conf
-                    echo "nameserver $DNS_SECONDARY" >> /etc/resolv.conf
-                fi
-                chattr +i /etc/resolv.conf 2>/dev/null
-                echo -e "${C_GREEN}✅ DNS forwarding configured for DNSTT (127.0.0.1)${C_RESET}"
-            else
-                echo -e "${C_GREEN}✅ DNS forwarding already configured for DNSTT${C_RESET}"
-            fi
-        fi
-        
-        # Start DNSTT services if installed but not running
-        if [ -f "$DNSTT_SERVICE_FILE" ] && ! systemctl is-active --quiet dnstt.service 2>/dev/null; then
-            echo -e "${C_YELLOW}⚠️ DNSTT is installed but not running. Starting...${C_RESET}"
-            systemctl start dnstt.service 2>/dev/null
-            sleep 2
-        fi
-        
-        if [ -f "$DNSTT_EDNS_SERVICE" ] && ! systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-            systemctl start dnstt-edns-proxy.service 2>/dev/null
-            sleep 2
-        fi
-        
-        if systemctl is-active --quiet dnstt.service 2>/dev/null && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-            echo -e "${C_GREEN}✅ DNSTT DNS forwarding enabled and active${C_RESET}"
-        fi
-    else
-        # DNSTT not installed - use systemd-resolved if available
-        if systemctl is-active --quiet systemd-resolved 2>/dev/null && ! systemctl is-masked systemd-resolved 2>/dev/null; then
-            if [ -f /etc/systemd/resolved.conf ]; then
+    # Use systemd-resolved if available
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null && ! systemctl is-masked systemd-resolved 2>/dev/null; then
+        if [ -f /etc/systemd/resolved.conf ]; then
+            if ! grep -q "^DNSStubListener=no" /etc/systemd/resolved.conf; then
+                sed -i 's/^#DNSStubListener=.*/DNSStubListener=no/' /etc/systemd/resolved.conf
+                sed -i '/^DNSStubListener=no/!s/^DNSStubListener=.*/DNSStubListener=no/' /etc/systemd/resolved.conf
                 if ! grep -q "^DNSStubListener=no" /etc/systemd/resolved.conf; then
-                    sed -i 's/^#DNSStubListener=.*/DNSStubListener=no/' /etc/systemd/resolved.conf
-                    sed -i '/^DNSStubListener=no/!s/^DNSStubListener=.*/DNSStubListener=no/' /etc/systemd/resolved.conf
-                    if ! grep -q "^DNSStubListener=no" /etc/systemd/resolved.conf; then
-                        echo "DNSStubListener=no" >> /etc/systemd/resolved.conf
-                    fi
-                    systemctl restart systemd-resolved 2>/dev/null
-                    echo -e "${C_GREEN}✅ DNS forwarding enabled in systemd-resolved${C_RESET}"
+                    echo "DNSStubListener=no" >> /etc/systemd/resolved.conf
                 fi
+                systemctl restart systemd-resolved 2>/dev/null
+                echo -e "${C_GREEN}✅ DNS forwarding enabled in systemd-resolved${C_RESET}"
             fi
         fi
     fi
@@ -4426,129 +3224,6 @@ fix_all_services() {
     echo -e "${C_BOLD}${C_CYAN}  🔍 STEP 1: DIAGNOSING SERVICES${C_RESET}"
     echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
     
-    # Check and fix DNSTT services
-    if [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ] || [ -f "$DNSTT_BINARY" ]; then
-        echo -e "\n${C_YELLOW}📡 Fixing DNSTT services...${C_RESET}"
-        
-        # Check DNSTT binary
-        if [ -f "$DNSTT_BINARY" ]; then
-            if [ ! -x "$DNSTT_BINARY" ]; then
-                echo -e "  ${C_YELLOW}⚠️${C_RESET} DNSTT binary is not executable. Fixing..."
-                chmod +x "$DNSTT_BINARY" 2>/dev/null
-                if [ -x "$DNSTT_BINARY" ]; then
-                    echo -e "  ${C_GREEN}✅${C_RESET} DNSTT binary permissions fixed"
-                    ((fixed_count++))
-                else
-                    echo -e "  ${C_RED}❌${C_RESET} Failed to fix DNSTT binary permissions"
-                    ((issues_found++))
-                fi
-            else
-                echo -e "  ${C_GREEN}✅${C_RESET} DNSTT binary permissions OK"
-            fi
-        else
-            echo -e "  ${C_YELLOW}⚠️${C_RESET} DNSTT binary not found at $DNSTT_BINARY"
-            ((issues_found++))
-        fi
-        
-        # Check and fix DNSTT server service
-        if [ -f "$DNSTT_SERVICE_FILE" ]; then
-            echo -e "  ${C_BLUE}🔧${C_RESET} Checking DNSTT server service..."
-            
-            # Reload systemd
-            systemctl daemon-reload 2>/dev/null
-            
-            # Enable service on boot if not enabled
-            if ! systemctl is-enabled --quiet dnstt.service 2>/dev/null; then
-                echo -e "    ${C_YELLOW}⚠️${C_RESET} DNSTT service not enabled on boot. Enabling..."
-                systemctl enable dnstt.service 2>/dev/null
-                if systemctl is-enabled --quiet dnstt.service 2>/dev/null; then
-                    echo -e "    ${C_GREEN}✅${C_RESET} DNSTT service enabled on boot"
-                    ((fixed_count++))
-                fi
-            else
-                echo -e "    ${C_GREEN}✅${C_RESET} DNSTT service already enabled on boot"
-            fi
-            
-            # Start service if not running
-            if ! systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                echo -e "    ${C_YELLOW}⚠️${C_RESET} DNSTT server not running. Starting..."
-                systemctl start dnstt.service 2>/dev/null
-                sleep 3
-                if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                    echo -e "    ${C_GREEN}✅${C_RESET} DNSTT server started successfully"
-                    ((fixed_count++))
-                else
-                    echo -e "    ${C_RED}❌${C_RESET} DNSTT server failed to start"
-                    echo -e "      ${C_DIM}Check logs: journalctl -u dnstt.service -n 20${C_RESET}"
-                    journalctl -u dnstt.service -n 10 --no-pager 2>/dev/null | tail -n 5
-                    ((issues_found++))
-                fi
-            else
-                echo -e "    ${C_GREEN}✅${C_RESET} DNSTT server is already running"
-            fi
-        fi
-        
-        # Check and fix EDNS proxy service
-        if [ -f "$DNSTT_EDNS_SERVICE" ]; then
-            echo -e "  ${C_BLUE}🔧${C_RESET} Checking DNSTT EDNS proxy service..."
-            
-            # Reload systemd
-            systemctl daemon-reload 2>/dev/null
-            
-            # Enable service on boot if not enabled
-            if ! systemctl is-enabled --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                echo -e "    ${C_YELLOW}⚠️${C_RESET} EDNS proxy service not enabled on boot. Enabling..."
-                systemctl enable dnstt-edns-proxy.service 2>/dev/null
-                if systemctl is-enabled --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                    echo -e "    ${C_GREEN}✅${C_RESET} EDNS proxy service enabled on boot"
-                    ((fixed_count++))
-                fi
-            else
-                echo -e "    ${C_GREEN}✅${C_RESET} EDNS proxy service already enabled on boot"
-            fi
-            
-            # Check if port 53 is available (systemd-resolved conflict)
-            if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-                echo -e "    ${C_YELLOW}⚠️${C_RESET} systemd-resolved is active and may block port 53"
-                echo -e "      ${C_BLUE}🔧${C_RESET} Stopping systemd-resolved..."
-                systemctl stop systemd-resolved 2>/dev/null
-                systemctl disable systemd-resolved 2>/dev/null
-                systemctl mask systemd-resolved 2>/dev/null
-                chattr -i /etc/resolv.conf 2>/dev/null
-                if [ -L /etc/resolv.conf ]; then
-                    rm -f /etc/resolv.conf
-                fi
-                echo "nameserver 127.0.0.1" > /etc/resolv.conf 2>/dev/null
-                echo "nameserver 8.8.8.8" >> /etc/resolv.conf 2>/dev/null
-                echo "nameserver 8.8.4.4" >> /etc/resolv.conf 2>/dev/null
-                chattr +i /etc/resolv.conf 2>/dev/null
-                pkill -9 systemd-resolved 2>/dev/null
-                sleep 2
-                echo -e "      ${C_GREEN}✅${C_RESET} systemd-resolved stopped and disabled"
-                ((fixed_count++))
-            fi
-            
-            # Start service if not running
-            if ! systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                echo -e "    ${C_YELLOW}⚠️${C_RESET} EDNS proxy not running. Starting..."
-                systemctl start dnstt-edns-proxy.service 2>/dev/null
-                sleep 3
-                if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                    echo -e "    ${C_GREEN}✅${C_RESET} EDNS proxy started successfully"
-                    ((fixed_count++))
-                else
-                    echo -e "    ${C_RED}❌${C_RESET} EDNS proxy failed to start"
-                    echo -e "      ${C_DIM}Check logs: journalctl -u dnstt-edns-proxy.service -n 20${C_RESET}"
-                    journalctl -u dnstt-edns-proxy.service -n 10 --no-pager 2>/dev/null | tail -n 5
-                    ((issues_found++))
-                fi
-            else
-                echo -e "    ${C_GREEN}✅${C_RESET} EDNS proxy is already running"
-            fi
-        fi
-    else
-        echo -e "\n${C_DIM}📡 DNSTT: Not installed (skipping)${C_RESET}"
-    fi
     
     # Check and fix HTTP Custom service
     if [ -f "$HTTP_CUSTOM_SERVICE_FILE" ] || [ -f "$HTTP_CUSTOM_BINARY" ]; then
@@ -4634,23 +3309,6 @@ fix_all_services() {
     # Final verification
     local all_ok=true
     
-    if [ -f "$DNSTT_SERVICE_FILE" ]; then
-        if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-            echo -e "  ${C_GREEN}✅${C_RESET} DNSTT server: ACTIVE"
-        else
-            echo -e "  ${C_RED}❌${C_RESET} DNSTT server: INACTIVE"
-            all_ok=false
-        fi
-    fi
-    
-    if [ -f "$DNSTT_EDNS_SERVICE" ]; then
-        if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-            echo -e "  ${C_GREEN}✅${C_RESET} DNSTT EDNS proxy: ACTIVE"
-        else
-            echo -e "  ${C_RED}❌${C_RESET} DNSTT EDNS proxy: INACTIVE"
-            all_ok=false
-        fi
-    fi
     
     if [ -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
         if systemctl is-active --quiet http-custom.service 2>/dev/null || systemctl is-active --quiet http-custom 2>/dev/null; then
@@ -4664,7 +3322,7 @@ fix_all_services() {
     fi
     
     # Check DNS forwarding
-    if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null || ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null || ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
         echo -e "  ${C_GREEN}✅${C_RESET} DNS Forwarding: ACTIVE"
     else
         echo -e "  ${C_YELLOW}⚠️${C_RESET} DNS Forwarding: PARTIAL or INACTIVE"
@@ -4727,35 +3385,6 @@ show_vpn_status() {
     fi
     echo -e "  ${ssh_emoji} SSH Service: ${ssh_status} ${C_DIM}(${ssh_service_name:-"Not found"})${C_RESET}"
     
-    # DNSTT Status - Improved detection
-    local dnstt_status="❌ INACTIVE"
-    local dnstt_emoji="🔴"
-    local dnstt_server_active=false
-    local dnstt_edns_active=false
-    
-    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-        dnstt_server_active=true
-    fi
-    
-    if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-        dnstt_edns_active=true
-    fi
-    
-    if [[ "$dnstt_server_active" == "true" ]] && [[ "$dnstt_edns_active" == "true" ]]; then
-        dnstt_status="✅ ACTIVE (Full)"
-        dnstt_emoji="🟢"
-    elif [[ "$dnstt_server_active" == "true" ]]; then
-        dnstt_status="⚠️ PARTIAL (Server active, EDNS inactive)"
-        dnstt_emoji="🟡"
-    elif [[ "$dnstt_edns_active" == "true" ]]; then
-        dnstt_status="⚠️ PARTIAL (EDNS active, Server inactive)"
-        dnstt_emoji="🟡"
-    elif [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ]; then
-        dnstt_status="⚠️ INSTALLED BUT NOT RUNNING"
-        dnstt_emoji="🟡"
-    fi
-    echo -e "  ${dnstt_emoji} DNSTT: ${dnstt_status}"
-    
     # OpenVPN Status
     local openvpn_status="❌ INACTIVE"
     local openvpn_emoji="🔴"
@@ -4809,9 +3438,9 @@ show_vpn_status() {
     local dns_forward_emoji="🔴"
     local dns_forward_details=""
     
-    # Check DNSTT EDNS Proxy (primary DNS forwarding for DNSTT)
-    if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-        dns_forward_status="✅ ACTIVE (DNSTT EDNS)"
+    # Check DNS forwarding services
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        dns_forward_status="✅ ACTIVE (systemd-resolved)"
         dns_forward_emoji="🟢"
         dns_forward_details="Port 53 → 5300"
     # Check systemd-resolved DNS forwarding
@@ -4859,18 +3488,6 @@ show_vpn_status() {
     # Check for installed but inactive services and offer to start them
     local has_inactive_services=false
     
-    if [[ "$dnstt_emoji" == "🟡" ]] || [[ "$dnstt_emoji" == "🔴" ]]; then
-        if [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ]; then
-            has_inactive_services=true
-            echo -e "  ${C_YELLOW}⚠️${C_RESET} DNSTT is installed but not fully active"
-            if ! systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                echo -e "    ${C_YELLOW}💡${C_RESET} DNSTT server service is not running. Would you like to start it?"
-            fi
-            if [ -f "$DNSTT_EDNS_SERVICE" ] && ! systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                echo -e "    ${C_YELLOW}💡${C_RESET} DNSTT EDNS proxy service is not running. Would you like to start it?"
-            fi
-        fi
-    fi
     
     if [[ "$http_custom_emoji" == "🟡" ]] || [[ "$http_custom_emoji" == "🔴" ]]; then
         if [ -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
@@ -4895,7 +3512,7 @@ show_vpn_status() {
     echo -e "\n${C_YELLOW}💡 Actions:${C_RESET}"
     echo -e "  ${C_CHOICE}1)${C_RESET} 🔄 Run Auto-Configuration (Enable DNS Forwarding & Start SSH)"
     if [[ "$has_inactive_services" == "true" ]]; then
-        echo -e "  ${C_CHOICE}2)${C_RESET} 🚀 Start All Installed But Inactive Services (DNSTT, HTTP Custom, etc.)"
+        echo -e "  ${C_CHOICE}2)${C_RESET} 🚀 Start All Installed But Inactive Services (HTTP Custom, etc.)"
     fi
     echo -e "  ${C_CHOICE}3)${C_RESET} 🔧 Fix All Services (Auto-Repair - Recommended)"
     echo -e "  ${C_CHOICE}4)${C_RESET} 🔍 Show Detailed Service Diagnostics"
@@ -4911,27 +3528,6 @@ show_vpn_status() {
         2)
             if [[ "$has_inactive_services" == "true" ]]; then
                 echo -e "\n${C_BLUE}🚀 Starting installed but inactive services...${C_RESET}"
-                # Start DNSTT services if installed
-                if [ -f "$DNSTT_SERVICE_FILE" ] && ! systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                    echo -e "${C_BLUE}▶️ Starting DNSTT server...${C_RESET}"
-                    systemctl start dnstt.service 2>/dev/null
-                    sleep 2
-                    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                        echo -e "${C_GREEN}✅ DNSTT server started${C_RESET}"
-                    else
-                        echo -e "${C_YELLOW}⚠️ DNSTT server failed to start. Check logs: journalctl -u dnstt.service${C_RESET}"
-                    fi
-                fi
-                if [ -f "$DNSTT_EDNS_SERVICE" ] && ! systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                    echo -e "${C_BLUE}▶️ Starting DNSTT EDNS proxy...${C_RESET}"
-                    systemctl start dnstt-edns-proxy.service 2>/dev/null
-                    sleep 2
-                    if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                        echo -e "${C_GREEN}✅ DNSTT EDNS proxy started${C_RESET}"
-                    else
-                        echo -e "${C_YELLOW}⚠️ DNSTT EDNS proxy failed to start. Check logs: journalctl -u dnstt-edns-proxy.service${C_RESET}"
-                    fi
-                fi
                 # Start HTTP Custom if installed
                 if [ -f "$HTTP_CUSTOM_SERVICE_FILE" ] && ! systemctl is-active --quiet http-custom.service 2>/dev/null && ! systemctl is-active --quiet http-custom 2>/dev/null; then
                     echo -e "${C_BLUE}▶️ Starting HTTP Custom...${C_RESET}"
@@ -4955,32 +3551,6 @@ show_vpn_status() {
             echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
             echo -e "${C_BOLD}${C_CYAN}  🔍 DETAILED SERVICE DIAGNOSTICS${C_RESET}"
             echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-            
-            # DNSTT Diagnostics
-            if [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ]; then
-                echo -e "\n${C_YELLOW}📡 DNSTT Diagnostics:${C_RESET}"
-                echo -e "  Service Files:"
-                [ -f "$DNSTT_SERVICE_FILE" ] && echo -e "    ${C_GREEN}✅${C_RESET} DNSTT service file: $DNSTT_SERVICE_FILE" || echo -e "    ${C_RED}❌${C_RESET} DNSTT service file: NOT FOUND"
-                [ -f "$DNSTT_EDNS_SERVICE" ] && echo -e "    ${C_GREEN}✅${C_RESET} EDNS proxy service file: $DNSTT_EDNS_SERVICE" || echo -e "    ${C_RED}❌${C_RESET} EDNS proxy service file: NOT FOUND"
-                echo -e "  Service Status:"
-                systemctl status dnstt.service --no-pager -l 2>/dev/null | head -n 10 || echo -e "    ${C_RED}❌${C_RESET} DNSTT service status unavailable"
-                if [ -f "$DNSTT_EDNS_SERVICE" ]; then
-                    systemctl status dnstt-edns-proxy.service --no-pager -l 2>/dev/null | head -n 10 || echo -e "    ${C_RED}❌${C_RESET} EDNS proxy service status unavailable"
-                fi
-                echo -e "  Port Status:"
-                if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
-                    echo -e "    ${C_GREEN}✅${C_RESET} Port 53 (UDP) is listening"
-                    ss -lunp 2>/dev/null | grep -E ':(53|:53)\s'
-                else
-                    echo -e "    ${C_RED}❌${C_RESET} Port 53 (UDP) is NOT listening"
-                fi
-                if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
-                    echo -e "    ${C_GREEN}✅${C_RESET} Port 5300 (UDP) is listening"
-                    ss -lunp 2>/dev/null | grep -E ':(5300|:5300)\s'
-                else
-                    echo -e "    ${C_RED}❌${C_RESET} Port 5300 (UDP) is NOT listening"
-                fi
-            fi
             
             # HTTP Custom Diagnostics
             if [ -f "$HTTP_CUSTOM_SERVICE_FILE" ]; then
@@ -5448,32 +4018,6 @@ protocol_menu() {
             ssl_tunnel_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"
         fi
         
-        local dnstt_status
-        if [ -f "$DNSTT_SERVICE_FILE" ] || [ -f "$DNSTT_EDNS_SERVICE" ]; then
-            # DNSTT is installed - check service status
-            local dnstt_server_active=false
-            local dnstt_edns_active=false
-            
-            if systemctl is-active --quiet dnstt.service 2>/dev/null; then
-                dnstt_server_active=true
-            fi
-            
-            if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
-                dnstt_edns_active=true
-            fi
-            
-            if [[ "$dnstt_server_active" == "true" ]] && [[ "$dnstt_edns_active" == "true" ]]; then
-                dnstt_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"
-            elif [[ "$dnstt_server_active" == "true" ]]; then
-                dnstt_status="${C_BRIGHT_YELLOW}${C_BOLD}[PARTIAL: Server only]${C_RESET}"
-            elif [[ "$dnstt_edns_active" == "true" ]]; then
-                dnstt_status="${C_BRIGHT_YELLOW}${C_BOLD}[PARTIAL: EDNS only]${C_RESET}"
-            else
-                dnstt_status="${C_BRIGHT_YELLOW}[INSTALLED: NOT RUNNING]${C_RESET}"
-            fi
-        else
-            dnstt_status="${C_DIM}[NOT INSTALLED]${C_RESET}"
-        fi
         
         local webproxy_status="${C_DIM}[INACTIVE]${C_RESET}"
         local webproxy_ports=""
@@ -5509,20 +4053,29 @@ protocol_menu() {
         printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}4${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall udp-custom${C_RESET}                                              ${C_BRIGHT_CYAN}║${C_RESET}\n"
         printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}5${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🔒  Install ${ssl_tunnel_text}${C_RESET}                                   ${ssl_tunnel_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
         printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}6${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall SSL Tunnel${C_RESET}                                              ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}7${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}📡  Install/View DNSTT (Port 53/5300)${C_RESET}                            ${dnstt_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}8${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall DNSTT${C_RESET}                                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}9${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🌐  Install WebSocket Proxy${webproxy_ports}${C_RESET}                     ${webproxy_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}10${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall WebSocket Proxy${C_RESET}                                          ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}11${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🌐  Install/Manage Nginx Proxy (80/443)${C_RESET}                        ${nginx_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}14${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🌐  Install HTTP Custom (Port $HTTP_CUSTOM_PORT)${C_RESET}                        ${http_custom_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}15${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall HTTP Custom${C_RESET}                                              ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}16${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🛡   Install ZiVPN (UDP 5667 + Port Share)${C_RESET}                        ${zivpn_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}17${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall ZiVPN${C_RESET}                                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}7${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🌐  Install WebSocket Proxy${webproxy_ports}${C_RESET}                     ${webproxy_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}8${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall WebSocket Proxy${C_RESET}                                          ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}9${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🌐  Install/Manage Nginx Proxy (80/443)${C_RESET}                        ${nginx_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}12${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🌐  Install HTTP Custom (Port $HTTP_CUSTOM_PORT)${C_RESET}                        ${http_custom_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}13${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall HTTP Custom${C_RESET}                                              ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}14${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🛡   Install ZiVPN (UDP 5667 + Port Share)${C_RESET}                        ${zivpn_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}15${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall ZiVPN${C_RESET}                                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        
+        local slowdns_status="${C_DIM}[NOT INSTALLED]${C_RESET}"
+        if [ -f "$SLOWDNS_SERVICE_FILE" ]; then
+            if systemctl is-active --quiet slowdns.service 2>/dev/null; then
+                slowdns_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"
+            else
+                slowdns_status="${C_BRIGHT_YELLOW}[INSTALLED: NOT RUNNING]${C_RESET}"
+            fi
+        fi
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}16${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}📡  Install/View SlowDNS (Port 53/5300)${C_RESET}                            ${slowdns_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}17${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall SlowDNS${C_RESET}                                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
         echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                                                        ${C_BRIGHT_CYAN}║${C_RESET}"
         echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}💻  MANAGEMENT PANELS${C_RESET}                                                                        ${C_BRIGHT_CYAN}║${C_RESET}"
         echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                                                        ${C_BRIGHT_CYAN}║${C_RESET}"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}12${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}💻  Install X-UI Panel${C_RESET}                                             ${xui_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
-        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}13${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall X-UI Panel${C_RESET}                                                 ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}10${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}💻  Install X-UI Panel${C_RESET}                                             ${xui_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}11${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall X-UI Panel${C_RESET}                                                 ${C_BRIGHT_CYAN}║${C_RESET}\n"
         echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
         printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}0${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_CYAN}${C_BOLD}↩️   Return to Main Menu${C_RESET}                                                                        ${C_BRIGHT_CYAN}║${C_RESET}\n"
         echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
@@ -5539,12 +4092,12 @@ protocol_menu() {
             1) install_badvpn; press_enter ;; 2) uninstall_badvpn; press_enter ;;
             3) install_udp_custom; press_enter ;; 4) uninstall_udp_custom; press_enter ;;
             5) install_ssl_tunnel; press_enter ;; 6) uninstall_ssl_tunnel; press_enter ;;
-            7) install_dnstt; press_enter ;; 8) uninstall_dnstt; press_enter ;;
-            9) install_web_proxy; press_enter ;; 10) uninstall_web_proxy; press_enter ;;
-            11) nginx_proxy_menu ;;
-            12) install_xui_panel; press_enter ;; 13) uninstall_xui_panel; press_enter ;;
-            14) install_http_custom; press_enter ;; 15) uninstall_http_custom; press_enter ;;
-            16) install_zivpn; press_enter ;; 17) uninstall_zivpn; press_enter ;;
+            7) install_web_proxy; press_enter ;; 8) uninstall_web_proxy; press_enter ;;
+            9) nginx_proxy_menu ;;
+            10) install_xui_panel; press_enter ;; 11) uninstall_xui_panel; press_enter ;;
+            12) install_http_custom; press_enter ;; 13) uninstall_http_custom; press_enter ;;
+            14) install_zivpn; press_enter ;; 15) uninstall_zivpn; press_enter ;;
+            16) install_slowdns; press_enter ;; 17) uninstall_slowdns; press_enter ;;
             0) return ;;
             *) invalid_option ;;
         esac
@@ -5722,7 +4275,7 @@ uninstall_script() {
     echo -e " - The main command ($(command -v menu))"
     echo -e " - All configuration and user data ($DB_DIR)"
     echo -e " - The active limiter service ($LIMITER_SERVICE)"
-    echo -e " - All installed services (badvpn, udp-custom, SSL Tunnel, Nginx, DNSTT, WebSocket Proxy)"
+    echo -e " - All installed services (badvpn, udp-custom, SSL Tunnel, Nginx, WebSocket Proxy)"
     echo -e "\n${C_RED}This action is irreversible.${C_RESET}"
     echo ""
     read -p "👉 Type 'yes' to confirm and proceed with uninstallation: " confirm
@@ -5742,7 +4295,6 @@ uninstall_script() {
     chattr -i /etc/resolv.conf &>/dev/null
 
     purge_nginx "silent"
-    uninstall_dnstt
     uninstall_badvpn
     uninstall_udp_custom
     uninstall_ssl_tunnel
