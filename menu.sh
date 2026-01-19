@@ -2283,7 +2283,7 @@ install_dnstt() {
     echo -e "${C_BLUE}🔐 Setting up cryptographic keys...${C_RESET}"
     
     # Constant public key that must never change
-    CONSTANT_PUBLIC_KEY="f61eddddaa99d111d5a44b794e95313c9597b95094c3fe422c0a47a130ca3c99"
+    CONSTANT_PUBLIC_KEY="f7faa7519d38fdda4c07eb7804c4fffef5d8a6e866debda48fe1f37035abf647"
     
     # Check if keys already exist - DO NOT regenerate if server.key exists
     if [[ -f "$DNSTT_KEYS_DIR/server.key" ]]; then
@@ -2722,6 +2722,7 @@ RestartPreventExitStatus=0
 StandardOutput=journal
 StandardError=journal
 User=root
+# Ensure port 53 binding works properly (low port binding for DNS)
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
 NoNewPrivileges=false
@@ -5676,23 +5677,32 @@ uninstall_dt_proxy_full() {
 }
 
 dt_proxy_menu() {
-     while true; do
-        show_banner
+    while true; do
+        clear; show_banner
         local dt_proxy_status
         if [ -f "/usr/local/bin/main" ] && [ -f "/usr/local/bin/proxy" ]; then
-            dt_proxy_status="${C_STATUS_A}(Installed)${C_RESET}"
+            dt_proxy_status="${C_BRIGHT_GREEN}${C_BOLD}[INSTALLED]${C_RESET}"
         else
-            dt_proxy_status="${C_STATUS_I}(Not Installed)${C_RESET}"
+            dt_proxy_status="${C_DIM}[NOT INSTALLED]${C_RESET}"
         fi
 
-        echo -e "\n   ${C_TITLE}═════════════════[ ${C_BOLD}🚀 DT Proxy Management ${dt_proxy_status} ${C_RESET}${C_TITLE}]═════════════════${C_RESET}"
-        echo -e "     ${C_CHOICE}1)${C_RESET} 🚀 Install DT Tunnel (Mod + Proxy)"
-        echo -e "     ${C_CHOICE}2)${C_RESET} ▶️ Launch DT Tunnel Management Menu"
-        echo -e "     ${C_DANGER}3)${C_RESET} 🗑️ Uninstall DT Tunnel (Mod + Proxy)"
-        echo -e "   ${C_DIM}~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~${C_RESET}"
-        echo -e "     ${C_WARN}0)${C_RESET} ↩️ Return to Main Menu"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_MAGENTA}${C_BOLD}🚀  DT PROXY MANAGEMENT${C_RESET}${C_BRIGHT_CYAN}                                                                    ${dt_proxy_status}  ║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                                                        ${C_BRIGHT_CYAN}║${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}1${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🚀  Install DT Tunnel (Mod + Proxy)${C_RESET}                                              ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}2${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}▶️   Launch DT Tunnel Management Menu${C_RESET}                                        ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_RED}${C_BOLD}3${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_RED}${C_BOLD}🗑   Uninstall DT Tunnel (Mod + Proxy)${C_RESET}                                            ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                                                        ${C_BRIGHT_CYAN}║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}0${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_CYAN}${C_BOLD}↩️   Return to Main Menu${C_RESET}                                                                        ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
         echo
-        read -p "$(echo -e ${C_PROMPT}"👉 Select an option: "${C_RESET})" choice
+        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e -n "${C_BRIGHT_YELLOW}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}👉${C_RESET} ${C_BRIGHT_CYAN}${C_BOLD}Select an option:${C_RESET} ${C_BRIGHT_WHITE}"
+        read -r choice
+        echo -e "${C_BRIGHT_YELLOW}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
+        echo
         case $choice in
             1) install_dt_proxy_full; press_enter ;;
             2) launch_dt_proxy_menu; press_enter ;;
