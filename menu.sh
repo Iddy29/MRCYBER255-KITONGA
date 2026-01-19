@@ -1855,9 +1855,6 @@ install_dnstt() {
                 3)
                     check_dnstt_diagnostics
                     press_enter
-                    elif command -v firewall-cmd &> /dev/null; then
-                        firewall-cmd --list-ports 2>/dev/null | grep -E '(53|5300)' || echo -e "${C_DIM}  (No specific firewalld rules found for ports 53/5300)${C_RESET}"
-                    fi
                     ;;
                 4)
                     echo -e "${C_DIM}Skipping restart...${C_RESET}"
@@ -1869,19 +1866,108 @@ install_dnstt() {
             echo -e "${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
             echo -e "  ${C_GREEN}🎉${C_RESET} ${C_WHITE}All DNSTT services are active and ports are listening!${C_RESET}"
             
-            # Add option to verify public key
-            echo -e "\n${C_BLUE}Additional options:${C_RESET}"
-            echo -e "  ${C_GREEN}1)${C_RESET} 🔐 Verify Public Key"
-            echo -e "  ${C_GREEN}2)${C_RESET} ⏭️  Return to menu"
-            read -p "$(echo -e ${C_PROMPT}"👉 Select an option [2]: "${C_RESET})" verify_choice
-            verify_choice=${verify_choice:-2}
+            # Comprehensive view menu
+            echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "${C_BOLD}${C_BLUE}  📋 DNSTT MANAGEMENT OPTIONS${C_RESET}"
+            echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+            echo -e "  ${C_GREEN}1)${C_RESET} 🔄 Restart all DNSTT services"
+            echo -e "  ${C_GREEN}2)${C_RESET} 📋 View service logs"
+            echo -e "  ${C_GREEN}3)${C_RESET} 🔍 Run DNSTT diagnostics (NS check + ports)"
+            echo -e "  ${C_GREEN}4)${C_RESET} 🔐 Verify Public Key"
+            echo -e "  ${C_GREEN}5)${C_RESET} ⏭️  Return to menu"
+            read -p "$(echo -e ${C_PROMPT}"👉 Select an option [5]: "${C_RESET})" view_choice
+            view_choice=${view_choice:-5}
             
-            case $verify_choice in
+            case $view_choice in
                 1)
-                    verify_dnstt_keys
+                    echo -e "\n${C_BLUE}🔄 Starting/Restarting DNSTT services...${C_RESET}"
+                    
+                    # Start/restart DNSTT server
+                    if [ -f "$DNSTT_SERVICE_FILE" ]; then
+                        if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                            systemctl restart dnstt.service 2>/dev/null
+                            echo -e "${C_BLUE}  ↻ Restarting DNSTT server...${C_RESET}"
+                        else
+                            systemctl start dnstt.service 2>/dev/null
+                            systemctl enable dnstt.service 2>/dev/null
+                            echo -e "${C_BLUE}  ▶️ Starting DNSTT server...${C_RESET}"
+                        fi
+                        sleep 2
+                        if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                            echo -e "${C_GREEN}✅ DNSTT server is now active.${C_RESET}"
+                        else
+                            echo -e "${C_RED}❌ Failed to start DNSTT server.${C_RESET}"
+                            echo -e "${C_YELLOW}  Showing last 15 lines of logs:${C_RESET}"
+                            journalctl -u dnstt.service -n 15 --no-pager
+                        fi
+                    else
+                        echo -e "${C_YELLOW}⚠️ DNSTT service file not found.${C_RESET}"
+                    fi
+                    
+                    sleep 1
+                    
+                    # Start/restart EDNS proxy
+                    if [ -f "$DNSTT_EDNS_SERVICE" ]; then
+                        if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                            systemctl restart dnstt-edns-proxy.service 2>/dev/null
+                            echo -e "${C_BLUE}  ↻ Restarting EDNS proxy...${C_RESET}"
+                        else
+                            systemctl start dnstt-edns-proxy.service 2>/dev/null
+                            systemctl enable dnstt-edns-proxy.service 2>/dev/null
+                            echo -e "${C_BLUE}  ▶️ Starting EDNS proxy...${C_RESET}"
+                        fi
+                        sleep 2
+                        if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                            echo -e "${C_GREEN}✅ EDNS proxy is now active.${C_RESET}"
+                        else
+                            echo -e "${C_RED}❌ Failed to start EDNS proxy.${C_RESET}"
+                            echo -e "${C_YELLOW}  Showing last 15 lines of logs:${C_RESET}"
+                            journalctl -u dnstt-edns-proxy.service -n 15 --no-pager
+                        fi
+                    else
+                        echo -e "${C_YELLOW}⚠️ EDNS proxy service file not found.${C_RESET}"
+                    fi
+                    
+                    # Enable DNS forwarding
+                    enable_dns_forwarding
+                    
+                    sleep 2
+                    echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+                    echo -e "${C_BOLD}${C_BLUE}  📊 UPDATED STATUS${C_RESET}"
+                    echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+                    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}DNSTT Server:${C_RESET}     🟢 ✅ ACTIVE"
+                    else
+                        echo -e "  ${C_GREEN}1️⃣${C_RESET} ${C_WHITE}DNSTT Server:${C_RESET}     🔴 ❌ INACTIVE"
+                        echo -e "     ${C_YELLOW}💡${C_RESET} ${C_DIM}Check logs: journalctl -u dnstt.service -n 20${C_RESET}"
+                    fi
+                    
+                    if [ -f "$DNSTT_EDNS_SERVICE" ] && systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+                        echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}EDNS Proxy:${C_RESET}       🟢 ✅ ACTIVE"
+                    else
+                        echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}EDNS Proxy:${C_RESET}       🔴 ❌ INACTIVE"
+                        echo -e "     ${C_YELLOW}💡${C_RESET} ${C_DIM}Check logs: journalctl -u dnstt-edns-proxy.service -n 20${C_RESET}"
+                    fi
                     press_enter
                     ;;
                 2)
+                    echo -e "\n${C_BLUE}📋 DNSTT Server Logs (last 20 lines):${C_RESET}"
+                    journalctl -u dnstt.service -n 20 --no-pager
+                    if [ -f "$DNSTT_EDNS_SERVICE" ]; then
+                        echo -e "\n${C_BLUE}📋 EDNS Proxy Logs (last 20 lines):${C_RESET}"
+                        journalctl -u dnstt-edns-proxy.service -n 20 --no-pager
+                    fi
+                    press_enter
+                    ;;
+                3)
+                    check_dnstt_diagnostics
+                    press_enter
+                    ;;
+                4)
+                    verify_dnstt_keys
+                    press_enter
+                    ;;
+                5)
                     ;;
                 *)
                     ;;
