@@ -45,6 +45,14 @@ DOWNLOAD_TIMEOUT="60"      # File download timeout
 LIMITER_CHECK_INTERVAL="3"          # Check interval in seconds
 LIMITER_LOCK_DURATION="120"         # Lock duration in seconds when limit exceeded
 
+# SlowDNS Pre-Configuration (Optional - for automated installation)
+# If these values are set, the script will use them automatically without prompting
+# Leave empty to be prompted during installation
+SLOWDNS_PRE_CONFIG_TUNNEL_DOMAIN="" # e.g., "tunnel.yourdomain.com" (tunnel domain, optional)
+SLOWDNS_PRE_CONFIG_NS_DOMAIN=""    # e.g., "ns1.yourdomain.com" (nameserver hostname)
+SLOWDNS_PRE_CONFIG_MTU=""           # e.g., "1200" (MTU value: 512, 1200, or 1800)
+SLOWDNS_PRE_CONFIG_FORWARD_TARGET="" # e.g., "ssh" or "v2ray" (forward target)
+
 # =============================================================================
 # END OF MANUAL CONFIGURATION SECTION
 # =============================================================================
@@ -1425,10 +1433,10 @@ install_slowdns() {
         # Check ports
         local port53_status="❌ NOT LISTENING"
         local port5300_status="❌ NOT LISTENING"
-        if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+        if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s' || netstat -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
             port53_status="✅ LISTENING"
         fi
-        if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+        if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s' || netstat -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
             port5300_status="✅ LISTENING"
         fi
         echo -e "  ${C_GREEN}2️⃣${C_RESET} ${C_WHITE}Port 53 (UDP):${C_RESET}   ${port53_status}"
@@ -1438,25 +1446,56 @@ install_slowdns() {
         echo -e "\n${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
         echo -e "${C_BOLD}${C_BLUE}  📋 SLOWDNS MANAGEMENT OPTIONS${C_RESET}"
         echo -e "${C_BOLD}${C_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
-        echo -e "  ${C_GREEN}1)${C_RESET} 🔄 Restart SlowDNS service"
+        echo -e "  ${C_GREEN}1)${C_RESET} 🔄 Restart SlowDNS services"
         echo -e "  ${C_GREEN}2)${C_RESET} 📋 View service logs"
         echo -e "  ${C_GREEN}3)${C_RESET} 🔍 View configuration details"
         echo -e "  ${C_GREEN}4)${C_RESET} 🔐 View/Verify Public Key"
         echo -e "  ${C_GREEN}5)${C_RESET} 📱 View VPN Connection Details (Public Key + Nameserver)"
-        echo -e "  ${C_GREEN}6)${C_RESET} ⏭️  Return to menu"
-        read -p "$(echo -e ${C_PROMPT}"👉 Select an option [6]: "${C_RESET})" view_choice
-        view_choice=${view_choice:-6}
+        echo -e "  ${C_GREEN}6)${C_RESET} 🔧 Diagnose port listening issues"
+        echo -e "  ${C_GREEN}7)${C_RESET} ⏭️  Return to menu"
+        read -p "$(echo -e ${C_PROMPT}"👉 Select an option [7]: "${C_RESET})" view_choice
+        view_choice=${view_choice:-7}
         
         case $view_choice in
             1)
-                echo -e "\n${C_BLUE}🔄 Restarting SlowDNS service...${C_RESET}"
-                systemctl restart slowdns.service 2>/dev/null
-                sleep 2
+                echo -e "\n${C_BLUE}🔄 Restarting SlowDNS services...${C_RESET}"
+                systemctl daemon-reload
+                systemctl restart slowdns.service slowdns-proxy.service 2>/dev/null
+                sleep 3
+                
+                local slowdns_ok=false
+                local proxy_ok=false
+                
                 if systemctl is-active --quiet slowdns.service 2>/dev/null; then
-                    echo -e "${C_GREEN}✅ SlowDNS service restarted successfully${C_RESET}"
+                    echo -e "${C_GREEN}✅ SlowDNS server service restarted successfully${C_RESET}"
+                    slowdns_ok=true
                 else
-                    echo -e "${C_YELLOW}⚠️ SlowDNS service may need attention${C_RESET}"
+                    echo -e "${C_YELLOW}⚠️ SlowDNS server service may need attention${C_RESET}"
                     journalctl -u slowdns.service -n 15 --no-pager
+                fi
+                
+                if systemctl is-active --quiet slowdns-proxy.service 2>/dev/null; then
+                    echo -e "${C_GREEN}✅ SlowDNS proxy service restarted successfully${C_RESET}"
+                    proxy_ok=true
+                else
+                    echo -e "${C_YELLOW}⚠️ SlowDNS proxy service may need attention${C_RESET}"
+                    journalctl -u slowdns-proxy.service -n 15 --no-pager
+                fi
+                
+                if [[ "$slowdns_ok" == "true" ]] && [[ "$proxy_ok" == "true" ]]; then
+                    echo -e "\n${C_GREEN}✅ Both SlowDNS services are running${C_RESET}"
+                    echo -e "${C_BLUE}Checking ports...${C_RESET}"
+                    sleep 1
+                    if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s' || netstat -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+                        echo -e "${C_GREEN}✅ Port 53 (UDP) is listening${C_RESET}"
+                    else
+                        echo -e "${C_YELLOW}⚠️ Port 53 (UDP) is not listening yet${C_RESET}"
+                    fi
+                    if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s' || netstat -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+                        echo -e "${C_GREEN}✅ Port 5300 (UDP) is listening${C_RESET}"
+                    else
+                        echo -e "${C_YELLOW}⚠️ Port 5300 (UDP) is not listening yet${C_RESET}"
+                    fi
                 fi
                 press_enter
                 ;;
@@ -1555,7 +1594,84 @@ install_slowdns() {
                 show_slowdns_vpn_details
                 press_enter
                 ;;
-            6) return ;;
+            6)
+                echo -e "\n${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+                echo -e "${C_BOLD}${C_CYAN}  🔧 SLOWDNS PORT DIAGNOSTICS${C_RESET}"
+                echo -e "${C_BOLD}${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+                
+                echo -e "\n${C_BOLD}${C_YELLOW}📊 Service Status:${C_RESET}"
+                if systemctl is-active --quiet slowdns.service 2>/dev/null; then
+                    echo -e "  ${C_GREEN}✅ SlowDNS server: ACTIVE${C_RESET}"
+                else
+                    echo -e "  ${C_RED}❌ SlowDNS server: INACTIVE${C_RESET}"
+                fi
+                
+                if systemctl is-active --quiet slowdns-proxy.service 2>/dev/null; then
+                    echo -e "  ${C_GREEN}✅ SlowDNS proxy: ACTIVE${C_RESET}"
+                else
+                    echo -e "  ${C_RED}❌ SlowDNS proxy: INACTIVE${C_RESET}"
+                fi
+                
+                echo -e "\n${C_BOLD}${C_YELLOW}🔌 Port Status:${C_RESET}"
+                local port53_listening=false
+                local port5300_listening=false
+                
+                if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s' || netstat -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+                    echo -e "  ${C_GREEN}✅ Port 53 (UDP): LISTENING${C_RESET}"
+                    port53_listening=true
+                    if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+                        ss -lunp 2>/dev/null | grep -E ':(53|:53)\s' | head -n1
+                    elif netstat -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+                        netstat -lunp 2>/dev/null | grep -E ':(53|:53)\s' | head -n1
+                    fi
+                else
+                    echo -e "  ${C_RED}❌ Port 53 (UDP): NOT LISTENING${C_RESET}"
+                fi
+                
+                if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s' || netstat -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+                    echo -e "  ${C_GREEN}✅ Port 5300 (UDP): LISTENING${C_RESET}"
+                    port5300_listening=true
+                    if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+                        ss -lunp 2>/dev/null | grep -E ':(5300|:5300)\s' | head -n1
+                    elif netstat -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+                        netstat -lunp 2>/dev/null | grep -E ':(5300|:5300)\s' | head -n1
+                    fi
+                else
+                    echo -e "  ${C_RED}❌ Port 5300 (UDP): NOT LISTENING${C_RESET}"
+                fi
+                
+                echo -e "\n${C_BOLD}${C_YELLOW}🔍 Checking for Conflicts:${C_RESET}"
+                if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+                    echo -e "  ${C_RED}⚠️ systemd-resolved is ACTIVE (may conflict with port 53)${C_RESET}"
+                    echo -e "  ${C_YELLOW}   Consider: systemctl stop systemd-resolved${C_RESET}"
+                else
+                    echo -e "  ${C_GREEN}✅ systemd-resolved is not active${C_RESET}"
+                fi
+                
+                echo -e "\n${C_BOLD}${C_YELLOW}📋 Recent Service Logs:${C_RESET}"
+                if [[ "$port53_listening" == "false" ]] || [[ "$port5300_listening" == "false" ]]; then
+                    echo -e "\n${C_BLUE}SlowDNS Server Logs (last 10 lines):${C_RESET}"
+                    journalctl -u slowdns.service -n 10 --no-pager
+                    echo -e "\n${C_BLUE}SlowDNS Proxy Logs (last 10 lines):${C_RESET}"
+                    journalctl -u slowdns-proxy.service -n 10 --no-pager
+                fi
+                
+                echo -e "\n${C_BOLD}${C_YELLOW}💡 Troubleshooting Tips:${C_RESET}"
+                if [[ "$port53_listening" == "false" ]]; then
+                    echo -e "  ${C_WHITE}•${C_RESET} Check if systemd-resolved is using port 53"
+                    echo -e "  ${C_WHITE}•${C_RESET} Verify slowdns-proxy service is running: systemctl status slowdns-proxy"
+                    echo -e "  ${C_WHITE}•${C_RESET} Check proxy logs: journalctl -u slowdns-proxy.service -f"
+                    echo -e "  ${C_WHITE}•${C_RESET} Ensure Python script has execute permissions: chmod +x $SLOWDNS_DIR/dns-proxy.py"
+                fi
+                if [[ "$port5300_listening" == "false" ]]; then
+                    echo -e "  ${C_WHITE}•${C_RESET} Verify slowdns service is running: systemctl status slowdns"
+                    echo -e "  ${C_WHITE}•${C_RESET} Check server logs: journalctl -u slowdns.service -f"
+                    echo -e "  ${C_WHITE}•${C_RESET} Verify binary exists and is executable: ls -la $SLOWDNS_BINARY"
+                fi
+                
+                press_enter
+                ;;
+            7) return ;;
             *) return ;;
         esac
         return
@@ -1618,6 +1734,42 @@ install_slowdns() {
     local TUNNEL_DOMAIN=""
     local MTU_VALUE=""
     local FORWARD_TARGET="127.0.0.1:22"
+    local FORWARD_DESC="SSH (port 22)"
+    local use_preconfig=false
+    
+    # Check if pre-configured values are available
+    if [[ -n "$SLOWDNS_PRE_CONFIG_NS_DOMAIN" ]]; then
+        echo -e "\n${C_BLUE}📋 Using pre-configured SlowDNS settings...${C_RESET}"
+        NS_DOMAIN="$SLOWDNS_PRE_CONFIG_NS_DOMAIN"
+        use_preconfig=true
+        
+        if [[ -n "$SLOWDNS_PRE_CONFIG_TUNNEL_DOMAIN" ]]; then
+            TUNNEL_DOMAIN="$SLOWDNS_PRE_CONFIG_TUNNEL_DOMAIN"
+        fi
+        
+        if [[ -n "$SLOWDNS_PRE_CONFIG_MTU" ]]; then
+            MTU_VALUE="$SLOWDNS_PRE_CONFIG_MTU"
+        fi
+        
+        if [[ -n "$SLOWDNS_PRE_CONFIG_FORWARD_TARGET" ]]; then
+            if [[ "$SLOWDNS_PRE_CONFIG_FORWARD_TARGET" == "v2ray" ]] || [[ "$SLOWDNS_PRE_CONFIG_FORWARD_TARGET" == "V2Ray" ]] || [[ "$SLOWDNS_PRE_CONFIG_FORWARD_TARGET" == "8787" ]]; then
+                FORWARD_TARGET="127.0.0.1:8787"
+                FORWARD_DESC="V2Ray/XRay (port 8787)"
+            else
+                FORWARD_TARGET="127.0.0.1:22"
+                FORWARD_DESC="SSH (port 22)"
+            fi
+        fi
+        
+        echo -e "  ${C_GREEN}Nameserver:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+        if [[ -n "$TUNNEL_DOMAIN" ]]; then
+            echo -e "  ${C_GREEN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+        fi
+        if [[ -n "$MTU_VALUE" ]]; then
+            echo -e "  ${C_GREEN}MTU:${C_RESET} ${C_YELLOW}$MTU_VALUE${C_RESET}"
+        fi
+        echo -e "  ${C_GREEN}Forward Target:${C_RESET} ${C_YELLOW}$FORWARD_DESC${C_RESET}"
+    fi
     
     # Detect VPS information
     local vps_ip=$(_detect_server_ip)
@@ -1666,8 +1818,25 @@ install_slowdns() {
     echo -e "     ${C_WHITE}4.${C_RESET} SlowDNS handles the DNS tunnel traffic"
     echo ""
     
-    # Get nameserver domain
+    # Get nameserver domain (use pre-configured if available)
     local ns_domain_valid=false
+    
+    # Check if pre-configured nameserver is available
+    if [[ "$use_preconfig" == "true" ]] && [[ -n "$NS_DOMAIN" ]]; then
+        # Validate pre-configured nameserver
+        local validation_result
+        validation_result=$(_validate_nameserver_domain "$NS_DOMAIN" 2>&1)
+        if [[ $? -eq 0 ]]; then
+            ns_domain_valid=true
+            echo -e "${C_GREEN}✅ Pre-configured nameserver validated: $NS_DOMAIN${C_RESET}"
+        else
+            echo -e "${C_RED}❌ Pre-configured nameserver validation failed:${C_RESET}"
+            echo -e "${C_RED}$validation_result${C_RESET}"
+            echo -e "${C_YELLOW}Please fix the SLOWDNS_PRE_CONFIG_NS_DOMAIN value in the script.${C_RESET}"
+            return 1
+        fi
+    fi
+    
     while [[ "$ns_domain_valid" == "false" ]]; do
         read -p "👉 Enter your nameserver HOSTNAME (e.g., ns1.yourdomain.com, NOT an IP): " NS_DOMAIN
         
@@ -1722,33 +1891,60 @@ install_slowdns() {
         fi
     done
     
-    # Get tunnel domain
-    read -p "👉 Enter tunnel domain (e.g., tunnel.yourdomain.com) [default: tunnel.${NS_DOMAIN#*.}]: " TUNNEL_DOMAIN
-    TUNNEL_DOMAIN=${TUNNEL_DOMAIN:-"tunnel.${NS_DOMAIN#*.}"}
-    echo -e "${C_GREEN}✅ Using tunnel domain: $TUNNEL_DOMAIN${C_RESET}"
-    
-    # Get MTU
-    read -p "👉 Enter MTU value (512, 1200, or 1800) [default: 1200]: " MTU_VALUE
-    MTU_VALUE=${MTU_VALUE:-"1200"}
-    if [[ ! "$MTU_VALUE" =~ ^(512|1200|1800)$ ]]; then
-        echo -e "${C_YELLOW}⚠️ Invalid MTU, using default 1200${C_RESET}"
-        MTU_VALUE="1200"
+    # Get tunnel domain (use pre-configured if available)
+    if [[ "$use_preconfig" != "true" ]] || [[ -z "$TUNNEL_DOMAIN" ]]; then
+        if [[ "$use_preconfig" == "true" ]] && [[ -z "$TUNNEL_DOMAIN" ]]; then
+            TUNNEL_DOMAIN="tunnel.${NS_DOMAIN#*.}"
+            echo -e "${C_GREEN}✅ Using auto-generated tunnel domain: $TUNNEL_DOMAIN${C_RESET}"
+        else
+            read -p "👉 Enter tunnel domain (e.g., tunnel.yourdomain.com) [default: tunnel.${NS_DOMAIN#*.}]: " TUNNEL_DOMAIN
+            TUNNEL_DOMAIN=${TUNNEL_DOMAIN:-"tunnel.${NS_DOMAIN#*.}"}
+            echo -e "${C_GREEN}✅ Using tunnel domain: $TUNNEL_DOMAIN${C_RESET}"
+        fi
     fi
-    echo -e "${C_GREEN}✅ Using MTU: $MTU_VALUE${C_RESET}"
     
-    # Forward target
-    echo -e "\n${C_BLUE}📡 Forward Target Configuration:${C_RESET}"
-    echo -e "  ${C_GREEN}1)${C_RESET} SSH (port 22)"
-    echo -e "  ${C_GREEN}2)${C_RESET} V2Ray/XRay (port 8787)"
-    read -p "$(echo -e ${C_PROMPT}"👉 Select forward target [1]: "${C_RESET})" forward_choice
-    forward_choice=${forward_choice:-1}
+    # Get MTU (use pre-configured if available)
+    if [[ "$use_preconfig" != "true" ]] || [[ -z "$MTU_VALUE" ]]; then
+        if [[ "$use_preconfig" == "true" ]] && [[ -z "$MTU_VALUE" ]]; then
+            MTU_VALUE="1200"
+            echo -e "${C_GREEN}✅ Using default MTU: $MTU_VALUE${C_RESET}"
+        else
+            read -p "👉 Enter MTU value (512, 1200, or 1800) [default: 1200]: " MTU_VALUE
+            MTU_VALUE=${MTU_VALUE:-"1200"}
+            if [[ ! "$MTU_VALUE" =~ ^(512|1200|1800)$ ]]; then
+                echo -e "${C_YELLOW}⚠️ Invalid MTU, using default 1200${C_RESET}"
+                MTU_VALUE="1200"
+            fi
+            echo -e "${C_GREEN}✅ Using MTU: $MTU_VALUE${C_RESET}"
+        fi
+    fi
     
-    case $forward_choice in
-        1) FORWARD_TARGET="127.0.0.1:22"; FORWARD_DESC="SSH (port 22)" ;;
-        2) FORWARD_TARGET="127.0.0.1:8787"; FORWARD_DESC="V2Ray/XRay (port 8787)" ;;
-        *) FORWARD_TARGET="127.0.0.1:22"; FORWARD_DESC="SSH (port 22)" ;;
-    esac
-    echo -e "${C_GREEN}✅ Forward target: $FORWARD_DESC${C_RESET}"
+    # Forward target (use pre-configured if available)
+    if [[ "$use_preconfig" != "true" ]] || [[ -z "$FORWARD_TARGET" ]] || [[ "$FORWARD_TARGET" == "127.0.0.1:22" ]]; then
+        if [[ "$use_preconfig" == "true" ]] && [[ -n "$SLOWDNS_PRE_CONFIG_FORWARD_TARGET" ]]; then
+            if [[ "$SLOWDNS_PRE_CONFIG_FORWARD_TARGET" == "v2ray" ]] || [[ "$SLOWDNS_PRE_CONFIG_FORWARD_TARGET" == "V2Ray" ]] || [[ "$SLOWDNS_PRE_CONFIG_FORWARD_TARGET" == "8787" ]]; then
+                FORWARD_TARGET="127.0.0.1:8787"
+                FORWARD_DESC="V2Ray/XRay (port 8787)"
+            else
+                FORWARD_TARGET="127.0.0.1:22"
+                FORWARD_DESC="SSH (port 22)"
+            fi
+            echo -e "${C_GREEN}✅ Using pre-configured forward target: $FORWARD_DESC${C_RESET}"
+        else
+            echo -e "\n${C_BLUE}📡 Forward Target Configuration:${C_RESET}"
+            echo -e "  ${C_GREEN}1)${C_RESET} SSH (port 22)"
+            echo -e "  ${C_GREEN}2)${C_RESET} V2Ray/XRay (port 8787)"
+            read -p "$(echo -e ${C_PROMPT}"👉 Select forward target [1]: "${C_RESET})" forward_choice
+            forward_choice=${forward_choice:-1}
+            
+            case $forward_choice in
+                1) FORWARD_TARGET="127.0.0.1:22"; FORWARD_DESC="SSH (port 22)" ;;
+                2) FORWARD_TARGET="127.0.0.1:8787"; FORWARD_DESC="V2Ray/XRay (port 8787)" ;;
+                *) FORWARD_TARGET="127.0.0.1:22"; FORWARD_DESC="SSH (port 22)" ;;
+            esac
+            echo -e "${C_GREEN}✅ Forward target: $FORWARD_DESC${C_RESET}"
+        fi
+    fi
     
     # Create directories
     echo -e "\n${C_BLUE}📁 Creating directories...${C_RESET}"
@@ -1845,15 +2041,15 @@ UPSTREAM_PORT = 5300
 
 def handle_request(server_sock, data, client_addr):
     try:
-            upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            upstream_sock.settimeout(10.0)
-                    upstream_sock.sendto(data, (UPSTREAM_HOST, UPSTREAM_PORT))
-                    resp, _ = upstream_sock.recvfrom(4096)
-                    if resp:
-                        server_sock.sendto(resp, client_addr)
-                upstream_sock.close()
-            except:
-                pass
+        upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        upstream_sock.settimeout(10.0)
+        upstream_sock.sendto(data, (UPSTREAM_HOST, UPSTREAM_PORT))
+        resp, _ = upstream_sock.recvfrom(4096)
+        if resp:
+            server_sock.sendto(resp, client_addr)
+        upstream_sock.close()
+    except:
+        pass
 
 def main():
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1901,6 +2097,8 @@ User=root
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
 NoNewPrivileges=false
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -1920,19 +2118,44 @@ EOF
     # Enable and start services
     echo -e "\n${C_BLUE}🚀 Starting SlowDNS services...${C_RESET}"
     systemctl daemon-reload
+    sleep 1
+    
+    # Start slowdns service first
+    echo -e "${C_BLUE}Starting SlowDNS server (port 5300)...${C_RESET}"
     systemctl enable slowdns.service
     systemctl start slowdns.service
-    sleep 2
+    sleep 3
     
     if systemctl is-active --quiet slowdns.service 2>/dev/null; then
         echo -e "${C_GREEN}✅ SlowDNS server started${C_RESET}"
         
+        # Verify port 5300 is listening
+        if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s' || netstat -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
+            echo -e "${C_GREEN}✅ Port 5300 (UDP) is listening${C_RESET}"
+        else
+            echo -e "${C_YELLOW}⚠️ Port 5300 (UDP) is not listening yet${C_RESET}"
+        fi
+        
+        # Start slowdns-proxy service
+        echo -e "${C_BLUE}Starting SlowDNS proxy (port 53)...${C_RESET}"
         systemctl enable slowdns-proxy.service
         systemctl start slowdns-proxy.service
-        sleep 2
+        sleep 3
         
         if systemctl is-active --quiet slowdns-proxy.service 2>/dev/null; then
             echo -e "${C_GREEN}✅ SlowDNS proxy started${C_RESET}"
+            
+            # Verify port 53 is listening
+            if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s' || netstat -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
+                echo -e "${C_GREEN}✅ Port 53 (UDP) is listening${C_RESET}"
+            else
+                echo -e "${C_YELLOW}⚠️ Port 53 (UDP) is not listening yet${C_RESET}"
+                echo -e "${C_BLUE}Checking proxy service logs...${C_RESET}"
+                journalctl -u slowdns-proxy.service -n 10 --no-pager
+            fi
+        else
+            echo -e "${C_YELLOW}⚠️ SlowDNS proxy service failed to start${C_RESET}"
+            journalctl -u slowdns-proxy.service -n 15 --no-pager
         fi
     else
         echo -e "${C_YELLOW}⚠️ SlowDNS server may need attention${C_RESET}"
