@@ -1380,8 +1380,8 @@ _validate_nameserver_domain() {
     local domain=$1
     if [[ -z "$domain" ]]; then
         echo "ERROR: Nameserver domain cannot be empty"
-        return 1
-    fi
+                return 1
+            fi
     # Check if it's an IP address
     if [[ "$domain" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
         echo "ERROR: NS records must point to HOSTNAMES, not IP addresses!"
@@ -1442,9 +1442,10 @@ install_slowdns() {
         echo -e "  ${C_GREEN}2)${C_RESET} 📋 View service logs"
         echo -e "  ${C_GREEN}3)${C_RESET} 🔍 View configuration details"
         echo -e "  ${C_GREEN}4)${C_RESET} 🔐 View/Verify Public Key"
-        echo -e "  ${C_GREEN}5)${C_RESET} ⏭️  Return to menu"
-        read -p "$(echo -e ${C_PROMPT}"👉 Select an option [5]: "${C_RESET})" view_choice
-        view_choice=${view_choice:-5}
+        echo -e "  ${C_GREEN}5)${C_RESET} 📱 View VPN Connection Details (Public Key + Nameserver)"
+        echo -e "  ${C_GREEN}6)${C_RESET} ⏭️  Return to menu"
+        read -p "$(echo -e ${C_PROMPT}"👉 Select an option [6]: "${C_RESET})" view_choice
+        view_choice=${view_choice:-6}
         
         case $view_choice in
             1)
@@ -1535,7 +1536,7 @@ install_slowdns() {
                 else
                     echo -e "${C_YELLOW}⚠️ Configuration file not found${C_RESET}"
                 fi
-                press_enter
+                    press_enter
                 ;;
             4)
                 if [ -f "$SLOWDNS_KEYS_DIR/server.pub" ]; then
@@ -1548,9 +1549,13 @@ install_slowdns() {
                 else
                     echo -e "${C_YELLOW}⚠️ Public key file not found${C_RESET}"
                 fi
+                    press_enter
+                    ;;
+            5)
+                show_slowdns_vpn_details
                 press_enter
                 ;;
-            5) return ;;
+            6) return ;;
             *) return ;;
         esac
         return
@@ -1576,16 +1581,16 @@ install_slowdns() {
             echo -e "${C_YELLOW}⚠️ Port 53 is in use by systemd-resolved.${C_RESET}"
             read -p "👉 Allow the script to disable systemd-resolved? (y/n): " resolve_confirm
             if [[ "$resolve_confirm" == "y" || "$resolve_confirm" == "Y" ]]; then
-                systemctl stop systemd-resolved 2>/dev/null
-                systemctl disable systemd-resolved 2>/dev/null
-                systemctl mask systemd-resolved 2>/dev/null
-                chattr -i /etc/resolv.conf 2>/dev/null
-                rm -f /etc/resolv.conf
+        systemctl stop systemd-resolved 2>/dev/null
+        systemctl disable systemd-resolved 2>/dev/null
+    systemctl mask systemd-resolved 2>/dev/null
+    chattr -i /etc/resolv.conf 2>/dev/null
+        rm -f /etc/resolv.conf
                 echo "nameserver 127.0.0.1" > /etc/resolv.conf
                 echo "nameserver $DNS_PRIMARY" >> /etc/resolv.conf
-                echo "nameserver $DNS_SECONDARY" >> /etc/resolv.conf
-                chattr +i /etc/resolv.conf 2>/dev/null
-                pkill -9 systemd-resolved 2>/dev/null
+    echo "nameserver $DNS_SECONDARY" >> /etc/resolv.conf
+    chattr +i /etc/resolv.conf 2>/dev/null
+    pkill -9 systemd-resolved 2>/dev/null
                 echo -e "${C_GREEN}✅ Port 53 has been freed${C_RESET}"
             else
                 echo -e "${C_RED}❌ Cannot proceed without freeing port 53. Aborting.${C_RESET}"
@@ -1597,7 +1602,7 @@ install_slowdns() {
     else
         echo -e "${C_GREEN}✅ Port 53 (UDP) is free to use.${C_RESET}"
     fi
-    
+
     check_and_open_firewall_port 53 udp || return
     
     echo -e "\n${C_BLUE}🔎 Checking port 5300 (UDP) availability...${C_RESET}"
@@ -1607,7 +1612,7 @@ install_slowdns() {
         echo -e "${C_GREEN}✅ Port 5300 (UDP) is free to use.${C_RESET}"
     fi
     check_and_open_firewall_port 5300 udp || return
-    
+
     # Get configuration
     local NS_DOMAIN=""
     local TUNNEL_DOMAIN=""
@@ -1785,21 +1790,21 @@ install_slowdns() {
     
     if [[ ! -f "$SLOWDNS_BINARY" ]] || [[ ! -s "$SLOWDNS_BINARY" ]]; then
         echo -e "${C_RED}❌ Downloaded file is empty or missing.${C_RESET}"
-        return 1
-    fi
+            return 1
+        fi
     chmod +x "$SLOWDNS_BINARY"
     
     # Generate keys
     echo -e "\n${C_BLUE}🔐 Generating cryptographic keys...${C_RESET}"
     if ! "$SLOWDNS_BINARY" -gen-key -privkey-file "$SLOWDNS_KEYS_DIR/server.key" -pubkey-file "$SLOWDNS_KEYS_DIR/server.pub" 2>/dev/null; then
         echo -e "${C_RED}❌ Failed to generate keys.${C_RESET}"
-        return 1
-    fi
+            return 1
+        fi
     
     local PUBLIC_KEY=$(cat "$SLOWDNS_KEYS_DIR/server.pub" 2>/dev/null | tr -d '\n\r')
     if [[ -z "$PUBLIC_KEY" ]]; then
         echo -e "${C_RED}❌ Failed to read public key.${C_RESET}"
-        return 1
+            return 1
     fi
     
     echo -e "${C_GREEN}✅ Keys generated successfully${C_RESET}"
@@ -1814,7 +1819,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$SLOWDNS_BINARY -udp :$SLOWDNS_INTERNAL_PORT -mtu $MTU_VALUE -privkey-file $SLOWDNS_KEYS_DIR/server.key $TUNNEL_DOMAIN $FORWARD_TARGET
+ExecStart=$SLOWDNS_BINARY -udp :$SLOWDNS_INTERNAL_PORT -mtu $MTU_VALUE -privkey-file $SLOWDNS_KEYS_DIR/server.key "$TUNNEL_DOMAIN" "$FORWARD_TARGET"
 Restart=always
 RestartSec=3
 RestartPreventExitStatus=0
@@ -1840,15 +1845,15 @@ UPSTREAM_PORT = 5300
 
 def handle_request(server_sock, data, client_addr):
     try:
-        upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        upstream_sock.settimeout(10.0)
-        upstream_sock.sendto(data, (UPSTREAM_HOST, UPSTREAM_PORT))
-        resp, _ = upstream_sock.recvfrom(4096)
-        if resp:
-            server_sock.sendto(resp, client_addr)
-        upstream_sock.close()
-    except:
-        pass
+            upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            upstream_sock.settimeout(10.0)
+                    upstream_sock.sendto(data, (UPSTREAM_HOST, UPSTREAM_PORT))
+                    resp, _ = upstream_sock.recvfrom(4096)
+                    if resp:
+                        server_sock.sendto(resp, client_addr)
+                upstream_sock.close()
+            except:
+                pass
 
 def main():
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1862,7 +1867,7 @@ def main():
     except Exception as e:
         print(f"[SlowDNS Proxy] ERROR: {e}")
         sys.exit(1)
-    
+
     while True:
         try:
             data, client_addr = server_sock.recvfrom(4096)
@@ -1973,6 +1978,135 @@ EOF
     press_enter
 }
 
+show_slowdns_vpn_details() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 📱 SlowDNS VPN Connection Details ---${C_RESET}"
+    
+    if [ ! -f "$SLOWDNS_CONFIG_FILE" ]; then
+        echo -e "\n${C_YELLOW}⚠️ SlowDNS is not installed or configuration not found.${C_RESET}"
+        echo -e "${C_YELLOW}Please install SlowDNS first.${C_RESET}"
+        return
+    fi
+    
+    source "$SLOWDNS_CONFIG_FILE"
+    local vps_ip=$(_detect_server_ip)
+    
+    echo -e "\n${C_BOLD}${C_GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                    ${C_BOLD}${C_WHITE}📱 SLOWDNS VPN CONNECTION DETAILS 📱${C_RESET}                    ${C_BOLD}${C_GREEN}║${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}╠══════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
+    
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                                                                              ${C_BOLD}${C_GREEN}║${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_BOLD}${C_YELLOW}🔐 PUBLIC KEY (Required for VPN Client):${C_RESET}                                    ${C_BOLD}${C_GREEN}║${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                                                                              ${C_BOLD}${C_GREEN}║${C_RESET}"
+    
+    local pubkey=""
+    if [ -f "$SLOWDNS_KEYS_DIR/server.pub" ]; then
+        pubkey=$(cat "$SLOWDNS_KEYS_DIR/server.pub" 2>/dev/null | tr -d '\n\r')
+    elif [[ -n "$PUBLIC_KEY" ]]; then
+        pubkey="$PUBLIC_KEY"
+    fi
+    
+    if [[ -n "$pubkey" ]]; then
+        echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_YELLOW}$pubkey${C_RESET}  ${C_BOLD}${C_GREEN}║${C_RESET}"
+    else
+        echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_RED}❌ Public key not found${C_RESET}                                                      ${C_BOLD}${C_GREEN}║${C_RESET}"
+    fi
+    
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                                                                              ${C_BOLD}${C_GREEN}║${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_BOLD}${C_YELLOW}🌐 NAMESERVER (DNS Server Address for VPN Client):${C_RESET}                        ${C_BOLD}${C_GREEN}║${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                                                                              ${C_BOLD}${C_GREEN}║${C_RESET}"
+    
+    if [[ -n "$NS_DOMAIN" ]]; then
+        echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_BOLD}${C_CYAN}Nameserver Hostname:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET}                                    ${C_BOLD}${C_GREEN}║${C_RESET}"
+        if [[ -n "$vps_ip" ]]; then
+            echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_BOLD}${C_CYAN}Server IP Address:${C_RESET} ${C_YELLOW}$vps_ip${C_RESET} ${C_DIM}(if A record exists)${C_RESET}                      ${C_BOLD}${C_GREEN}║${C_RESET}"
+        fi
+    else
+        echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_RED}❌ Nameserver not configured${C_RESET}                                                  ${C_BOLD}${C_GREEN}║${C_RESET}"
+    fi
+    
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                                                                              ${C_BOLD}${C_GREEN}║${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_BOLD}${C_YELLOW}📋 ADDITIONAL CONFIGURATION:${C_RESET}                                           ${C_BOLD}${C_GREEN}║${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                                                                              ${C_BOLD}${C_GREEN}║${C_RESET}"
+    
+    if [[ -n "$TUNNEL_DOMAIN" ]]; then
+        echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_CYAN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}                                          ${C_BOLD}${C_GREEN}║${C_RESET}"
+    fi
+    
+    if [[ -n "$MTU_VALUE" ]]; then
+        echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_CYAN}MTU Value:${C_RESET} ${C_YELLOW}$MTU_VALUE${C_RESET}                                                          ${C_BOLD}${C_GREEN}║${C_RESET}"
+    fi
+    
+    if [[ -n "$FORWARD_DESC" ]]; then
+        echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_CYAN}Forward Target:${C_RESET} ${C_YELLOW}$FORWARD_DESC${C_RESET}                                        ${C_BOLD}${C_GREEN}║${C_RESET}"
+    fi
+    
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                                                                              ${C_BOLD}${C_GREEN}║${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}╠══════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_BOLD}${C_MAGENTA}📱 VPN CLIENT CONFIGURATION INSTRUCTIONS:${C_RESET}                                 ${C_BOLD}${C_GREEN}║${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                                                                              ${C_BOLD}${C_GREEN}║${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_WHITE}1.${C_RESET} ${C_BOLD}Public Key:${C_RESET} Copy the public key above and paste it in your VPN client${C_BOLD}${C_GREEN}║${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                                                                              ${C_BOLD}${C_GREEN}║${C_RESET}"
+    
+    if [[ -n "$NS_DOMAIN" ]]; then
+        echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_WHITE}2.${C_RESET} ${C_BOLD}DNS Server:${C_RESET} Set DNS server to: ${C_YELLOW}$NS_DOMAIN${C_RESET}                    ${C_BOLD}${C_GREEN}║${C_RESET}"
+        if [[ -n "$vps_ip" ]]; then
+            echo -e "${C_BOLD}${C_GREEN}║${C_RESET}     ${C_DIM}Or use IP directly: $vps_ip (if A record exists)${C_RESET}                        ${C_BOLD}${C_GREEN}║${C_RESET}"
+        fi
+    else
+        echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_WHITE}2.${C_RESET} ${C_BOLD}DNS Server:${C_RESET} ${C_RED}Not configured${C_RESET}                                          ${C_BOLD}${C_GREEN}║${C_RESET}"
+    fi
+    
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                                                                              ${C_BOLD}${C_GREEN}║${C_RESET}"
+    
+    if [[ -n "$NS_DOMAIN" ]] && [[ -n "$vps_ip" ]]; then
+        echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_BOLD}${C_CYAN}🔍 DNS Record Verification:${C_RESET}                                            ${C_BOLD}${C_GREEN}║${C_RESET}"
+        echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                                                                              ${C_BOLD}${C_GREEN}║${C_RESET}"
+        
+        local resolved_ip=""
+        if command -v dig &> /dev/null; then
+            resolved_ip=$(dig +short A "$NS_DOMAIN" 2>/dev/null | grep -E '^[0-9]{1,3}\.' | head -n1)
+        elif command -v nslookup &> /dev/null; then
+            resolved_ip=$(nslookup "$NS_DOMAIN" 2>/dev/null | grep -A1 "Name:" | grep "Address:" | awk '{print $2}' | head -n1)
+        fi
+        
+        if [[ -n "$resolved_ip" ]]; then
+            if [[ "$resolved_ip" == "$vps_ip" ]]; then
+                echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_GREEN}✅ DNS A record verified: ${C_YELLOW}$NS_DOMAIN${C_RESET} → ${C_YELLOW}$resolved_ip${C_RESET}              ${C_BOLD}${C_GREEN}║${C_RESET}"
+            else
+                echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_YELLOW}⚠️ DNS A record points to different IP:${C_RESET}                                    ${C_BOLD}${C_GREEN}║${C_RESET}"
+                echo -e "${C_BOLD}${C_GREEN}║${C_RESET}     ${C_YELLOW}Current:${C_RESET} $NS_DOMAIN → $resolved_ip                                    ${C_BOLD}${C_GREEN}║${C_RESET}"
+                echo -e "${C_BOLD}${C_GREEN}║${C_RESET}     ${C_YELLOW}Expected:${C_RESET} $NS_DOMAIN → $vps_ip                                      ${C_BOLD}${C_GREEN}║${C_RESET}"
+                fi
+            else
+            echo -e "${C_BOLD}${C_GREEN}║${C_RESET}  ${C_YELLOW}⚠️ DNS A record not found or not yet propagated${C_RESET}                            ${C_BOLD}${C_GREEN}║${C_RESET}"
+            echo -e "${C_BOLD}${C_GREEN}║${C_RESET}     ${C_DIM}Please ensure: $NS_DOMAIN → $vps_ip${C_RESET}                                    ${C_BOLD}${C_GREEN}║${C_RESET}"
+        fi
+    fi
+    
+    echo -e "${C_BOLD}${C_GREEN}║${C_RESET}                                                                              ${C_BOLD}${C_GREEN}║${C_RESET}"
+    echo -e "${C_BOLD}${C_GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
+    
+    echo -e "\n${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}${C_YELLOW}  💡 QUICK COPY - VPN CONFIGURATION VALUES${C_RESET}"
+    echo -e "${C_BOLD}${C_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    
+    if [[ -n "$pubkey" ]]; then
+        echo -e "\n  ${C_BOLD}${C_GREEN}Public Key:${C_RESET}"
+        echo -e "  ${C_YELLOW}$pubkey${C_RESET}"
+    fi
+    
+            if [[ -n "$NS_DOMAIN" ]]; then
+        echo -e "\n  ${C_BOLD}${C_GREEN}Nameserver (DNS):${C_RESET}"
+        echo -e "  ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+        if [[ -n "$vps_ip" ]]; then
+            echo -e "  ${C_DIM}Or IP: $vps_ip${C_RESET}"
+        fi
+    fi
+    
+    echo ""
+}
+
 uninstall_slowdns() {
     clear; show_banner
     echo -e "${C_BOLD}${C_PURPLE}--- 🗑️ Uninstalling SlowDNS ---${C_RESET}"
@@ -1995,7 +2129,7 @@ uninstall_slowdns() {
     
     pkill -9 slowdns-server 2>/dev/null
     pkill -9 -f "dns-proxy.py" 2>/dev/null
-    sleep 2
+        sleep 2
     
     echo -e "${C_BLUE}🗑️ Removing files...${C_RESET}"
     rm -f "$SLOWDNS_SERVICE_FILE"
@@ -4230,7 +4364,7 @@ uninstall_dt_proxy_full() {
 }
 
 dt_proxy_menu() {
-    while true; do
+     while true; do
         clear; show_banner
         local dt_proxy_status
         if [ -f "/usr/local/bin/main" ] && [ -f "/usr/local/bin/proxy" ]; then
