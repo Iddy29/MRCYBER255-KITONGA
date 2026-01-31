@@ -1347,6 +1347,7 @@ install_new_dns_system() {
 }
 
 # =============================================================================
+<<<<<<< HEAD
 # SLOWDNS SYSTEM - Advanced DNS Tunneling with Enhanced Features
 # =============================================================================
 
@@ -1359,6 +1360,20 @@ SLOWDNS_SERVICE_FILE="/etc/systemd/system/slowdns.service"
 SLOWDNS_PUBLIC_PORT="53"
 SLOWDNS_INTERNAL_PORT="5300"
 SLOWDNS_DEFAULT_MTU="1200"
+=======
+# DNSTT SYSTEM - Advanced DNS Tunneling with Enhanced Features
+# =============================================================================
+
+# DNSTT Configuration Variables
+DNSTT_DIR="/root/dnstt"
+DNSTT_BINARY="/usr/local/bin/dnstt-server"
+DNSTT_KEYS_DIR="$DNSTT_DIR/keys"
+DNSTT_CONFIG_FILE="$DB_DIR/dnstt_info.conf"
+DNSTT_SERVICE_FILE="/etc/systemd/system/dnstt.service"
+DNSTT_PUBLIC_PORT="53"
+DNSTT_INTERNAL_PORT="5300"
+DNSTT_DEFAULT_MTU="1800"
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
 
 # Helper function to detect server IP
 _detect_server_ip() {
@@ -2009,7 +2024,11 @@ install_slowdns() {
     echo -e "\n${C_BLUE}📝 Creating systemd service...${C_RESET}"
     cat > "$SLOWDNS_SERVICE_FILE" <<-EOF
 [Unit]
+<<<<<<< HEAD
 Description=SlowDNS Server (Advanced DNS Tunneling)
+=======
+Description=DNSTT Server (Advanced DNS Tunneling)
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
 After=network.target
 Wants=network-online.target
 
@@ -2026,9 +2045,15 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
     
+<<<<<<< HEAD
     # Create DNS proxy script for port 53
     echo -e "\n${C_BLUE}📝 Creating DNS proxy script...${C_RESET}"
     cat > "$SLOWDNS_DIR/dns-proxy.py" <<'PROXYSCRIPT'
+=======
+    # Create EDNS proxy script for port 53 (handles EDNS0 buffer size)
+    echo -e "\n${C_BLUE}📝 Creating EDNS proxy script...${C_RESET}"
+    cat > "$SLOWDNS_DIR/dnstt-edns-proxy.py" <<'PROXYSCRIPT'
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
 #!/usr/bin/env python3
 import socket
 import threading
@@ -2039,14 +2064,77 @@ LISTEN_PORT = 53
 UPSTREAM_HOST = "127.0.0.1"
 UPSTREAM_PORT = 5300
 
+<<<<<<< HEAD
+=======
+# EDNS0 buffer size settings
+EXTERNAL_EDNS_SIZE = 512  # Size advertised to clients (compatibility)
+INTERNAL_EDNS_SIZE = 1800  # Size used internally (high speed)
+
+def modify_edns_size(data, target_size):
+    """Modify EDNS0 buffer size in DNS query"""
+    try:
+        # DNS header is 12 bytes
+        if len(data) <= 12:
+            return data
+            
+        # Check if there's an EDNS0 option (OPT pseudo-RR)
+        # OPT RR is at the end of DNS message, after question and RRs
+        # We'll look for OPT RR and modify its UDP payload size
+        
+        # Simplified EDNS0 detection and modification
+        # This handles basic cases for DNSTT
+        modified_data = bytearray(data)
+        
+        # Look for OPT RR (type 41)
+        idx = 12
+        query_count = (data[0] << 8) | data[1]
+        
+        # Skip questions
+        for _ in range(query_count):
+            while idx < len(data) and data[idx] != 0:
+                idx += 1
+            idx += 5  # Skip 0x00, QTYPE (2 bytes), QCLASS (2 bytes)
+            
+        # Skip answer, authority, and additional sections to find OPT RR
+        # OPT RR is in additional section with class = IN, type = OPT
+        while idx + 10 < len(data):
+            # Check if this is OPT RR (type 41)
+            if (data[idx+2] << 8 | data[idx+3]) == 41:
+                # Modify UDP payload size (bytes 4-5 of OPT RR)
+                modified_data[idx+4] = (target_size >> 8) & 0xFF
+                modified_data[idx+5] = target_size & 0xFF
+                return bytes(modified_data)
+            # Skip this RR
+            rdlength = (data[idx+8] << 8) | data[idx+9]
+            idx += 10 + rdlength
+            
+        return data
+    except Exception as e:
+        return data
+
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
 def handle_request(server_sock, data, client_addr):
     try:
         upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         upstream_sock.settimeout(10.0)
+<<<<<<< HEAD
         upstream_sock.sendto(data, (UPSTREAM_HOST, UPSTREAM_PORT))
         resp, _ = upstream_sock.recvfrom(4096)
         if resp:
             server_sock.sendto(resp, client_addr)
+=======
+        
+        # Modify EDNS size for upstream
+        modified_data = modify_edns_size(data, INTERNAL_EDNS_SIZE)
+        upstream_sock.sendto(modified_data, (UPSTREAM_HOST, UPSTREAM_PORT))
+        
+        resp, _ = upstream_sock.recvfrom(4096)
+        if resp:
+            # Modify EDNS size for client
+            modified_resp = modify_edns_size(resp, EXTERNAL_EDNS_SIZE)
+            server_sock.sendto(modified_resp, client_addr)
+            
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
         upstream_sock.close()
     except:
         pass
@@ -2056,12 +2144,24 @@ def main():
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         server_sock.bind((LISTEN_HOST, LISTEN_PORT))
+<<<<<<< HEAD
         print(f"[SlowDNS Proxy] Listening on {LISTEN_HOST}:{LISTEN_PORT}")
     except PermissionError:
         print(f"[SlowDNS Proxy] ERROR: Permission denied on port {LISTEN_PORT}")
         sys.exit(1)
     except Exception as e:
         print(f"[SlowDNS Proxy] ERROR: {e}")
+=======
+        print(f"[DNSTT EDNS Proxy] Listening on {LISTEN_HOST}:{LISTEN_PORT}")
+        print(f"[DNSTT EDNS Proxy] External EDNS size: {EXTERNAL_EDNS_SIZE} bytes")
+        print(f"[DNSTT EDNS Proxy] Internal EDNS size: {INTERNAL_EDNS_SIZE} bytes")
+        print(f"[DNSTT EDNS Proxy] Forwarding to: {UPSTREAM_HOST}:{UPSTREAM_PORT}")
+    except PermissionError:
+        print(f"[DNSTT EDNS Proxy] ERROR: Permission denied on port {LISTEN_PORT}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"[DNSTT EDNS Proxy] ERROR: {e}")
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
         sys.exit(1)
 
     while True:
@@ -2078,6 +2178,7 @@ if __name__ == "__main__":
     main()
 PROXYSCRIPT
     
+<<<<<<< HEAD
     chmod +x "$SLOWDNS_DIR/dns-proxy.py"
     
     # Create DNS proxy service
@@ -2091,6 +2192,21 @@ Requires=slowdns.service
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 $SLOWDNS_DIR/dns-proxy.py
+=======
+    chmod +x "$SLOWDNS_DIR/dnstt-edns-proxy.py"
+    
+    # Create EDNS proxy service
+    cat > "/etc/systemd/system/dnstt-edns-proxy.service" <<-EOF
+[Unit]
+Description=DNSTT EDNS Proxy (port 53 to 5300)
+After=network-online.target dnstt.service
+Wants=network-online.target
+Requires=dnstt.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 $SLOWDNS_DIR/dnstt-edns-proxy.py
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
 Restart=always
 RestartSec=3
 User=root
@@ -2116,6 +2232,7 @@ KEY_FILE_PATH="$SLOWDNS_KEYS_DIR"
 EOF
     
     # Enable and start services
+<<<<<<< HEAD
     echo -e "\n${C_BLUE}🚀 Starting SlowDNS services...${C_RESET}"
     systemctl daemon-reload
     sleep 1
@@ -2128,6 +2245,20 @@ EOF
     
     if systemctl is-active --quiet slowdns.service 2>/dev/null; then
         echo -e "${C_GREEN}✅ SlowDNS server started${C_RESET}"
+=======
+    echo -e "\n${C_BLUE}🚀 Starting DNSTT services...${C_RESET}"
+    systemctl daemon-reload
+    sleep 1
+    
+    # Start DNSTT server first
+    echo -e "${C_BLUE}Starting DNSTT server (port 5300)...${C_RESET}"
+    systemctl enable dnstt.service
+    systemctl start dnstt.service
+    sleep 3
+    
+    if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+        echo -e "${C_GREEN}✅ DNSTT server started${C_RESET}"
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
         
         # Verify port 5300 is listening
         if ss -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s' || netstat -lunp 2>/dev/null | grep -qE ':(5300|:5300)\s'; then
@@ -2136,6 +2267,7 @@ EOF
             echo -e "${C_YELLOW}⚠️ Port 5300 (UDP) is not listening yet${C_RESET}"
         fi
         
+<<<<<<< HEAD
         # Start slowdns-proxy service
         echo -e "${C_BLUE}Starting SlowDNS proxy (port 53)...${C_RESET}"
         systemctl enable slowdns-proxy.service
@@ -2144,12 +2276,23 @@ EOF
         
         if systemctl is-active --quiet slowdns-proxy.service 2>/dev/null; then
             echo -e "${C_GREEN}✅ SlowDNS proxy started${C_RESET}"
+=======
+        # Start DNSTT EDNS proxy service
+        echo -e "${C_BLUE}Starting DNSTT EDNS proxy (port 53)...${C_RESET}"
+        systemctl enable dnstt-edns-proxy.service
+        systemctl start dnstt-edns-proxy.service
+        sleep 3
+        
+        if systemctl is-active --quiet dnstt-edns-proxy.service 2>/dev/null; then
+            echo -e "${C_GREEN}✅ DNSTT EDNS proxy started${C_RESET}"
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
             
             # Verify port 53 is listening
             if ss -lunp 2>/dev/null | grep -qE ':(53|:53)\s' || netstat -lunp 2>/dev/null | grep -qE ':(53|:53)\s'; then
                 echo -e "${C_GREEN}✅ Port 53 (UDP) is listening${C_RESET}"
             else
                 echo -e "${C_YELLOW}⚠️ Port 53 (UDP) is not listening yet${C_RESET}"
+<<<<<<< HEAD
                 echo -e "${C_BLUE}Checking proxy service logs...${C_RESET}"
                 journalctl -u slowdns-proxy.service -n 10 --no-pager
             fi
@@ -2160,6 +2303,18 @@ EOF
     else
         echo -e "${C_YELLOW}⚠️ SlowDNS server may need attention${C_RESET}"
         journalctl -u slowdns.service -n 15 --no-pager
+=======
+                echo -e "${C_BLUE}Checking EDNS proxy service logs...${C_RESET}"
+                journalctl -u dnstt-edns-proxy.service -n 10 --no-pager
+            fi
+        else
+            echo -e "${C_YELLOW}⚠️ DNSTT EDNS proxy service failed to start${C_RESET}"
+            journalctl -u dnstt-edns-proxy.service -n 15 --no-pager
+        fi
+    else
+        echo -e "${C_YELLOW}⚠️ DNSTT server may need attention${C_RESET}"
+        journalctl -u dnstt.service -n 15 --no-pager
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
     fi
     
     # Configure DNS forwarding
@@ -2330,22 +2485,36 @@ show_slowdns_vpn_details() {
     echo ""
 }
 
+<<<<<<< HEAD
 uninstall_slowdns() {
     clear; show_banner
     echo -e "${C_BOLD}${C_PURPLE}--- 🗑️ Uninstalling SlowDNS ---${C_RESET}"
     
     if [ ! -f "$SLOWDNS_SERVICE_FILE" ] && [ ! -f "$SLOWDNS_BINARY" ]; then
         echo -e "${C_YELLOW}ℹ️ SlowDNS does not appear to be installed.${C_RESET}"
+=======
+uninstall_dnstt() {
+    clear; show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🗑️ Uninstalling DNSTT ---${C_RESET}"
+    
+    if [ ! -f "$DNSTT_SERVICE_FILE" ] && [ ! -f "$DNSTT_BINARY" ]; then
+        echo -e "${C_YELLOW}ℹ️ DNSTT does not appear to be installed.${C_RESET}"
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
         press_enter
         return
     fi
     
+<<<<<<< HEAD
     read -p "👉 Are you sure you want to uninstall SlowDNS? (y/n): " confirm
+=======
+    read -p "👉 Are you sure you want to uninstall DNSTT? (y/n): " confirm
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
         echo -e "${C_YELLOW}Uninstallation cancelled.${C_RESET}"
         return
     fi
     
+<<<<<<< HEAD
     echo -e "\n${C_BLUE}🛑 Stopping SlowDNS services...${C_RESET}"
     systemctl stop slowdns.service slowdns-proxy.service 2>/dev/null
     systemctl disable slowdns.service slowdns-proxy.service 2>/dev/null
@@ -2364,6 +2533,26 @@ uninstall_slowdns() {
     systemctl daemon-reload
     
     echo -e "${C_GREEN}✅ SlowDNS has been uninstalled successfully.${C_RESET}"
+=======
+    echo -e "\n${C_BLUE}🛑 Stopping DNSTT services...${C_RESET}"
+    systemctl stop dnstt.service dnstt-edns-proxy.service 2>/dev/null
+    systemctl disable dnstt.service dnstt-edns-proxy.service 2>/dev/null
+    
+    pkill -9 dnstt-server 2>/dev/null
+    pkill -9 -f "dnstt-edns-proxy.py" 2>/dev/null
+        sleep 2
+    
+    echo -e "${C_BLUE}🗑️ Removing files...${C_RESET}"
+    rm -f "$DNSTT_SERVICE_FILE"
+    rm -f "/etc/systemd/system/dnstt-edns-proxy.service"
+    rm -f "$DNSTT_BINARY"
+    rm -rf "$DNSTT_DIR"
+    rm -f "$DNSTT_CONFIG_FILE"
+    
+    systemctl daemon-reload
+    
+    echo -e "${C_GREEN}✅ DNSTT has been uninstalled successfully.${C_RESET}"
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
     press_enter
 }
 
@@ -4303,6 +4492,7 @@ show_banner() {
     # Clear screen once and display stable banner
     clear
     echo
+<<<<<<< HEAD
     # Modern ASCII Art Banner with Colors - Fixed Width
     echo -e "${C_BRIGHT_CYAN}${C_BOLD}"
     echo -e "    ███╗   ███╗██████╗  ██████╗██╗   ██╗███████╗██████╗ ██████╗ "
@@ -4329,6 +4519,34 @@ show_banner() {
     
     # Second row
     printf "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_RESET}  ${C_BRIGHT_GREEN}⏱  Uptime:${C_RESET} ${C_WHITE}%-20s${C_RESET}  ${C_BRIGHT_YELLOW}👤 Total Users:${C_RESET} ${C_WHITE}%3s${C_RESET}        ${C_BG_BLACK}${C_BRIGHT_WHITE}│${C_RESET}\n" "$up_time" "$total_users"
+=======
+    # Modern ASCII Art Banner with Colors - Compact Width
+    echo -e "${C_BRIGHT_CYAN}${C_BOLD}"
+    echo -e "    ███╗   ███╗██████╗  ██████╗██╗   ██╗███████╗██████╗"
+    echo -e "    ████╗ ████║██╔══██╗██╔════╝╚██╗ ██╔╝██╔════╝██╔══██╗"
+    echo -e "    ██╔████╔██║██████╔╝██║      ╚████╔╝ █████╗  ██████╔╝"
+    echo -e "    ██║╚██╔╝██║██╔══██╗██║       ╚██╔╝  ██╔══╝  ██╔══██╗"
+    echo -e "    ██║ ╚═╝ ██║██║  ██║╚██████╗   ██║   ███████╗██║  ██║"
+    echo -e "    ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝"
+    echo -e "${C_RESET}"
+    # Title Box - Compact Frame
+    echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╔════════════════════════════════════════════════════════════════╗${C_RESET}"
+    echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ║${C_RESET}${C_BRIGHT_CYAN}${C_BOLD}                 ✨ ${REPO_NAME} Manager ✨                 ${C_RESET}${C_BRIGHT_MAGENTA}${C_BOLD}║${C_RESET}"
+    echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ║${C_RESET}${C_BRIGHT_YELLOW}                     v3.4.0 (ActiveLimiter)                     ${C_RESET}${C_BRIGHT_MAGENTA}${C_BOLD}║${C_RESET}"
+    echo -e "${C_BRIGHT_MAGENTA}${C_BOLD}    ╚════════════════════════════════════════════════════════════════╝${C_RESET}"
+    echo
+    
+    # System Information Box - Clean Compact Frame
+    echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}${C_BOLD}    ┌─────────────────────────────────────────────────────────────────┐${C_RESET}"
+    echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_BRIGHT_CYAN}${C_BOLD}  📊 System Information${C_BRIGHT_WHITE}                                   │${C_RESET}"
+    echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}    ├─────────────────────────────────────────────────────────────────┤${C_RESET}"
+    
+    # First row
+    printf "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_RESET}  ${C_BRIGHT_GREEN}🖥 OS:${C_RESET} ${C_WHITE}%-22s${C_RESET} ${C_BRIGHT_YELLOW}👥 Online:${C_RESET} ${C_WHITE}%3s${C_RESET}  ${C_BG_BLACK}${C_BRIGHT_WHITE}│${C_RESET}\n" "$os_name" "$online_users"
+    
+    # Second row
+    printf "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_RESET}  ${C_BRIGHT_GREEN}⏱ Uptime:${C_RESET} ${C_WHITE}%-18s${C_RESET} ${C_BRIGHT_YELLOW}👤 Total:${C_RESET} ${C_WHITE}%3s${C_RESET}    ${C_BG_BLACK}${C_BRIGHT_WHITE}│${C_RESET}\n" "$up_time" "$total_users"
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
     
     # Third row - Resources with color bars
     local cpu_color=$C_BRIGHT_GREEN
@@ -4338,6 +4556,7 @@ show_banner() {
     if (( $(echo "$ram_usage > 80" | bc -l 2>/dev/null || echo 0) )); then ram_color=$C_BRIGHT_RED
     elif (( $(echo "$ram_usage > 50" | bc -l 2>/dev/null || echo 0) )); then ram_color=$C_BRIGHT_YELLOW; fi
     
+<<<<<<< HEAD
     printf "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_RESET}  ${C_BRIGHT_GREEN}⚡ Resources:${C_RESET} ${cpu_color}CPU(${cpu_cores}): %5s%%${C_RESET} ${C_BRIGHT_WHITE}|${C_RESET} ${ram_color}RAM(${ram_total}): %5s%%${C_RESET}    ${C_BG_BLACK}${C_BRIGHT_WHITE}│${C_RESET}\n" "$cpu_usage" "$ram_usage"
     
     # Server IP
@@ -4346,13 +4565,27 @@ show_banner() {
     fi
     
     echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}    └─────────────────────────────────────────────────────────────────────┘${C_RESET}"
+=======
+    printf "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_RESET}  ${C_BRIGHT_GREEN}⚡ Res:${C_RESET} ${cpu_color}CPU:%3s%%${C_RESET} ${C_BRIGHT_WHITE}|${C_RESET} ${ram_color}RAM:%3s%%${C_RESET}    ${C_BG_BLACK}${C_BRIGHT_WHITE}│${C_RESET}\n" "$cpu_usage" "$ram_usage"
+    
+    # Server IP
+    if [[ -n "$server_ip" ]]; then
+        printf "${C_BG_BLACK}${C_BRIGHT_WHITE}    │${C_RESET}  ${C_BRIGHT_GREEN}🌐 IP:${C_RESET} ${C_BRIGHT_CYAN}%-43s${C_RESET}  ${C_BG_BLACK}${C_BRIGHT_WHITE}│${C_RESET}\n" "$server_ip"
+    fi
+    
+    echo -e "${C_BG_BLACK}${C_BRIGHT_WHITE}    └─────────────────────────────────────────────────────────────────┘${C_RESET}"
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
     
     # Display script location
     local script_path=$(readlink -f "$(command -v menu)" 2>/dev/null || echo "/usr/local/bin/menu")
     if [[ -f "$script_path" ]]; then
         local script_size=$(du -h "$script_path" 2>/dev/null | cut -f1 || echo "N/A")
         echo
+<<<<<<< HEAD
         echo -e "${C_DIM}${C_ITALIC}    📁 Script Location: ${C_YELLOW}$script_path${C_RESET}${C_DIM}${C_ITALIC} (Size: ${script_size})${C_RESET}"
+=======
+        echo -e "${C_DIM}${C_ITALIC}    📁 Script: ${C_YELLOW}$script_path${C_RESET} (${script_size})${C_RESET}"
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
     fi
     echo
 }
@@ -4399,6 +4632,7 @@ protocol_menu() {
             fi
         fi
         
+<<<<<<< HEAD
         echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═══════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
         echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_MAGENTA}${C_BOLD}🔌  PROTOCOL & PANEL MANAGEMENT${C_RESET}${C_BRIGHT_CYAN}                                                                        ║${C_RESET}"
         echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
@@ -4436,6 +4670,45 @@ protocol_menu() {
         echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═══════════════════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
         printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}0${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_CYAN}${C_BOLD}↩️   Return to Main Menu${C_RESET}                                                                        ${C_BRIGHT_CYAN}║${C_RESET}\n"
         echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═══════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
+=======
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╔═════════════════════════════════════════════════════════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ║${C_RESET}  ${C_BRIGHT_MAGENTA}${C_BOLD}🔌  PROTOCOL & PANEL MANAGEMENT${C_RESET}${C_BRIGHT_CYAN}                                                                      ║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═════════════════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}📡  TUNNELLING PROTOCOLS${C_RESET}                                                                      ${C_BRIGHT_CYAN}║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                                                      ${C_BRIGHT_CYAN}║${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}1${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🚀  Install badvpn (UDP 7300)${C_RESET}                                  ${badvpn_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}2${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall badvpn${C_RESET}                                            ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}3${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🚀  Install udp-custom (Excl. 53,5300)${C_RESET}                          ${udp_custom_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}4${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall udp-custom${C_RESET}                                        ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}5${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🔒  Install ${ssl_tunnel_text}${C_RESET}                                   ${ssl_tunnel_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}6${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall SSL Tunnel${C_RESET}                                        ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}7${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🌐  Install WebSocket Proxy${webproxy_ports}${C_RESET}                   ${webproxy_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}8${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall WebSocket Proxy${C_RESET}                                      ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}9${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🌐  Install/Manage Nginx Proxy (80/443)${C_RESET}                      ${nginx_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}12${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🌐  Install HTTP Custom (Port $HTTP_CUSTOM_PORT)${C_RESET}                      ${http_custom_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}13${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall HTTP Custom${C_RESET}                                        ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}14${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🛡   Install ZiVPN (UDP 5667 + Port Share)${C_RESET}                      ${zivpn_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}15${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall ZiVPN${C_RESET}                                            ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        
+        local dnstt_status="${C_DIM}[NOT INSTALLED]${C_RESET}"
+        if [ -f "$DNSTT_SERVICE_FILE" ]; then
+            if systemctl is-active --quiet dnstt.service 2>/dev/null; then
+                dnstt_status="${C_BRIGHT_GREEN}${C_BOLD}[ACTIVE]${C_RESET}"
+            else
+                dnstt_status="${C_BRIGHT_YELLOW}[INSTALLED: NOT RUNNING]${C_RESET}"
+            fi
+        fi
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}16${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}📡  Install/View DNSTT (Port 53/5300)${C_RESET}                          ${dnstt_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}17${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall DNSTT${C_RESET}                                            ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                                                      ${C_BRIGHT_CYAN}║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}💻  MANAGEMENT PANELS${C_RESET}                                                                      ${C_BRIGHT_CYAN}║${C_RESET}"
+        echo -e "${C_BRIGHT_CYAN}    ║${C_RESET}                                                                                                      ${C_BRIGHT_CYAN}║${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}10${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}💻  Install X-UI Panel${C_RESET}                                       ${xui_status}  ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_GREEN}${C_BOLD}11${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_YELLOW}${C_BOLD}🗑   Uninstall X-UI Panel${C_RESET}                                           ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╠═════════════════════════════════════════════════════════════════════════════════════════╣${C_RESET}"
+        printf "${C_BRIGHT_CYAN}    ║${C_RESET}  ${C_BRIGHT_YELLOW}${C_BOLD}0${C_RESET}${C_WHITE})${C_RESET} ${C_BRIGHT_CYAN}${C_BOLD}↩️  Return to Main Menu${C_RESET}                                                                ${C_BRIGHT_CYAN}║${C_RESET}\n"
+        echo -e "${C_BRIGHT_CYAN}${C_BOLD}    ╚═════════════════════════════════════════════════════════════════════════════════════════╝${C_RESET}"
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
         echo
         # Spacing line before input prompt
         echo -e "${C_DIM}                                                                                                        ${C_RESET}"
@@ -4454,7 +4727,11 @@ protocol_menu() {
             10) install_xui_panel; press_enter ;; 11) uninstall_xui_panel; press_enter ;;
             12) install_http_custom; press_enter ;; 13) uninstall_http_custom; press_enter ;;
             14) install_zivpn; press_enter ;; 15) uninstall_zivpn; press_enter ;;
+<<<<<<< HEAD
             16) install_slowdns; press_enter ;; 17) uninstall_slowdns; press_enter ;;
+=======
+            16) install_dnstt; press_enter ;; 17) uninstall_dnstt; press_enter ;;
+>>>>>>> 3e7b805 (Fix DNSTT integration and update UI)
             0) return ;;
             *) invalid_option ;;
         esac
